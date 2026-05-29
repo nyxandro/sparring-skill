@@ -2,6 +2,8 @@
 
 ![Sparring Skill](./sparring.png)
 
+[![Download Skill](https://img.shields.io/badge/Download-sparring.skill-blue?style=for-the-badge)](https://github.com/nyxandro/sparring-skill/raw/main/dist/sparring.skill)
+
 Sparring Skill is for the moments when one model's answer is not enough.
 
 Ask your main agent to “do sparring with Claude” or “do sparring with Codex”, and it will ask the
@@ -44,24 +46,26 @@ available or when you specifically want to watch the other agent in a terminal s
 
 ## Install
 
-The `sparring/` directory is the skill. It contains `SKILL.md` and the runtime harness under
-`sparring/bin/` and `sparring/lib/`; no external checkout or build step is required.
+The committed `dist/sparring.skill` file is the downloadable skill archive. It contains the same
+self-contained skill folder as `sparring/`: `SKILL.md` plus the runtime harness under `bin/` and
+`lib/`; no external checkout or build step is required after download.
 
 Install the current skill file into OpenCode:
 
 ```bash
 rm -rf ~/.config/opencode/skills/sparring
-cp -R sparring ~/.config/opencode/skills/sparring
+unzip dist/sparring.skill -d ~/.config/opencode/skills
 ```
 
 Install it into Claude Code:
 
 ```bash
 rm -rf ~/.claude/skills/sparring
-cp -R sparring ~/.claude/skills/sparring
+unzip dist/sparring.skill -d ~/.claude/skills
 ```
 
-Restart OpenCode or Claude Code after updating the skill.
+For local development, copying the `sparring/` folder directly into the skills directory is also
+valid. Restart OpenCode or Claude Code after updating the skill.
 
 ## Requirements
 
@@ -110,6 +114,7 @@ sparring/SKILL.md           skill instructions
 sparring/bin/sparctl        print-first CLI plus tmux fallback controls
 sparring/lib/print-agent.sh claude -p / codex exec providers and session history
 sparring/lib/tmux-agent.sh  live tmux fallback primitives
+dist/sparring.skill         downloadable self-contained skill archive
 test/                       smoke and regression tests
 ```
 
