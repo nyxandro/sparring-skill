@@ -9,8 +9,11 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
-# shellcheck source=../lib/tmux-agent.sh
-source "$ROOT/lib/tmux-agent.sh"
+SKILL_DIR="$ROOT/sparring"
+SPARCTL="$SKILL_DIR/bin/sparctl"
+MOCK_AGENT="$SKILL_DIR/bin/mock-agent.sh"
+# shellcheck source=../sparring/lib/tmux-agent.sh
+source "$SKILL_DIR/lib/tmux-agent.sh"
 
 AGENT="auto-print-smoke"
 WORK_DIR="${TMPDIR:-/tmp}/sparctl-print-${AGENT}"
@@ -131,23 +134,23 @@ chmod +x "$SHIM_DIR/claude" "$SHIM_DIR/codex"
 export PATH="$SHIM_DIR:$ORIGINAL_PATH"
 
 # Claude print mode should run without tmux and write only the model answer to the output file.
-$ROOT/bin/sparctl ask-print claude "print smoke" "$CLAUDE_OUT" >/dev/null
+$SPARCTL ask-print claude "print smoke" "$CLAUDE_OUT" >/dev/null
 grep -q "\[claude-print\] print smoke" "$CLAUDE_OUT" \
   || fail "claude print output was not captured"
 
 # Codex exec mode should use the non-interactive subcommand rather than a TUI session.
-$ROOT/bin/sparctl ask-print codex "exec smoke" "$CODEX_OUT" >/dev/null
+$SPARCTL ask-print codex "exec smoke" "$CODEX_OUT" >/dev/null
 grep -q "\[codex-exec\] exec smoke" "$CODEX_OUT" \
   || fail "codex exec output was not captured"
 
 # Providers that exit successfully with an empty answer should fail fast, not create a blank result.
-if $ROOT/bin/sparctl ask-print claude "empty smoke" "$EMPTY_OUT" >/dev/null 2>&1; then
+if $SPARCTL ask-print claude "empty smoke" "$EMPTY_OUT" >/dev/null 2>&1; then
   fail "empty provider answer was accepted as a successful response"
 fi
 [ ! -e "$EMPTY_OUT" ] || fail "empty provider answer left an output file behind"
 
 # Provider failures should preserve enough stderr context to diagnose real CLI breakage.
-if $ROOT/bin/sparctl ask-print claude "provider fail smoke" "$PROVIDER_FAIL_OUT" > /dev/null 2> "$PROVIDER_FAIL_ERR"; then
+if $SPARCTL ask-print claude "provider fail smoke" "$PROVIDER_FAIL_OUT" > /dev/null 2> "$PROVIDER_FAIL_ERR"; then
   fail "provider failure was accepted as a successful response"
 fi
 grep -q "exit status 42" "$PROVIDER_FAIL_ERR" \
@@ -157,34 +160,34 @@ grep -q "claude shim simulated provider failure" "$PROVIDER_FAIL_ERR" \
 [ ! -e "$PROVIDER_FAIL_OUT" ] || fail "provider failure left an output file behind"
 
 # Session mode should carry previous turns forward by constructing a consolidated prompt.
-$ROOT/bin/sparctl ask-session claude "$SESSION_FILE" "first turn" "$SESSION_OUT" >/dev/null
+$SPARCTL ask-session claude "$SESSION_FILE" "first turn" "$SESSION_OUT" >/dev/null
 grep -q "USER: first turn" "$SESSION_FILE" \
   || fail "session file did not record the first user turn"
-$ROOT/bin/sparctl ask-session claude "$SESSION_FILE" "second turn" "$SESSION_OUT" >/dev/null
+$SPARCTL ask-session claude "$SESSION_FILE" "second turn" "$SESSION_OUT" >/dev/null
 grep -q "first turn" "$SESSION_OUT" \
   || fail "second session prompt did not include previous context"
 grep -q "USER: second turn" "$SESSION_FILE" \
   || fail "session file did not record the second user turn"
 
 # Native resume mode should continue through provider-owned sessions rather than prompt replay.
-$ROOT/bin/sparctl ask-resume claude "$CLAUDE_RESUME_STATE" "native claude first" "$CLAUDE_RESUME_OUT" >/dev/null
+$SPARCTL ask-resume claude "$CLAUDE_RESUME_STATE" "native claude first" "$CLAUDE_RESUME_OUT" >/dev/null
 grep -q "session_id=" "$CLAUDE_RESUME_STATE" \
   || fail "claude native resume state did not store a session id"
-$ROOT/bin/sparctl ask-resume claude "$CLAUDE_RESUME_STATE" "native claude second" "$CLAUDE_RESUME_OUT" >/dev/null
+$SPARCTL ask-resume claude "$CLAUDE_RESUME_STATE" "native claude second" "$CLAUDE_RESUME_OUT" >/dev/null
 grep -q "\[claude-native-second\] native claude second" "$CLAUDE_RESUME_OUT" \
   || fail "claude native resume did not continue through --resume"
 
-$ROOT/bin/sparctl ask-resume codex "$CODEX_RESUME_STATE" "native codex first" "$CODEX_RESUME_OUT" >/dev/null
+$SPARCTL ask-resume codex "$CODEX_RESUME_STATE" "native codex first" "$CODEX_RESUME_OUT" >/dev/null
 grep -q "session_id=codex-native-thread" "$CODEX_RESUME_STATE" \
   || fail "codex native resume state did not store the JSON thread id"
-$ROOT/bin/sparctl ask-resume codex "$CODEX_RESUME_STATE" "native codex second" "$CODEX_RESUME_OUT" >/dev/null
+$SPARCTL ask-resume codex "$CODEX_RESUME_STATE" "native codex second" "$CODEX_RESUME_OUT" >/dev/null
 grep -q "\[codex-native-second\] native codex second" "$CODEX_RESUME_OUT" \
   || fail "codex native resume did not continue through exec resume"
 
 # Auto mode should prefer print, but fall back to tmux when no print provider exists for the name.
-SPAR_AGENT_CMD="$ROOT/bin/mock-agent.sh $AGENT" $ROOT/bin/sparctl ask-auto "$AGENT" "fallback smoke" "$AUTO_OUT" >/dev/null
+SPAR_AGENT_CMD="$MOCK_AGENT $AGENT" $SPARCTL ask-auto "$AGENT" "fallback smoke" "$AUTO_OUT" >/dev/null
 grep -q "\[$AGENT\] on: fallback smoke" "$AUTO_OUT" \
   || fail "ask-auto did not fall back to the tmux backend"
-$ROOT/bin/sparctl stop "$AGENT"
+$SPARCTL stop "$AGENT"
 
 echo "PRINT_SMOKE_OK: print providers -> session history -> tmux fallback verified"

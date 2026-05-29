@@ -9,8 +9,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Run the stable print-first path before tmux-specific fallbacks.
+bash "$HERE/skill-layout.sh"
 bash "$HERE/print.sh"
 bash "$HERE/smoke.sh"
 bash "$HERE/sparctl.sh"
 
-echo "SPARRING_TESTS_OK: print -> smoke -> sparctl all verified"
+echo "SPARRING_TESTS_OK: skill layout -> print -> smoke -> sparctl all verified"

@@ -2,8 +2,6 @@
 
 ![Sparring Skill](./sparring.png)
 
-[![Download Skill](https://img.shields.io/badge/Download-sparring.skill-blue?style=for-the-badge)](https://github.com/nyxandro/sparring-skill/raw/main/dist/sparring.skill)
-
 Sparring Skill is for the moments when one model's answer is not enough.
 
 Ask your main agent to “do sparring with Claude” or “do sparring with Codex”, and it will ask the
@@ -46,20 +44,21 @@ available or when you specifically want to watch the other agent in a terminal s
 
 ## Install
 
-The skill expects this repository to be available locally and `bin/sparctl` to be executable.
+The `sparring/` directory is the skill. It contains `SKILL.md` and the runtime harness under
+`sparring/bin/` and `sparring/lib/`; no external checkout or build step is required.
 
 Install the current skill file into OpenCode:
 
 ```bash
-mkdir -p ~/.config/opencode/skills/sparring
-unzip -p dist/sparring.skill sparring/SKILL.md > ~/.config/opencode/skills/sparring/SKILL.md
+rm -rf ~/.config/opencode/skills/sparring
+cp -R sparring ~/.config/opencode/skills/sparring
 ```
 
 Install it into Claude Code:
 
 ```bash
-mkdir -p ~/.claude/skills/sparring
-unzip -p dist/sparring.skill sparring/SKILL.md > ~/.claude/skills/sparring/SKILL.md
+rm -rf ~/.claude/skills/sparring
+cp -R sparring ~/.claude/skills/sparring
 ```
 
 Restart OpenCode or Claude Code after updating the skill.
@@ -77,25 +76,25 @@ Most users do not need these directly; the skill calls them for you.
 
 ```bash
 # One-off second opinion.
-bin/sparctl ask-print claude "Review this plan" /tmp/claude.txt
+sparring/bin/sparctl ask-print claude "Review this plan" /tmp/claude.txt
 
 # Multi-turn sparring with local history.
-bin/sparctl ask-session claude /tmp/sparring.log "First question" /tmp/turn-1.txt
-bin/sparctl ask-session claude /tmp/sparring.log "Follow-up" /tmp/turn-2.txt
+sparring/bin/sparctl ask-session claude /tmp/sparring.log "First question" /tmp/turn-1.txt
+sparring/bin/sparctl ask-session claude /tmp/sparring.log "Follow-up" /tmp/turn-2.txt
 
 # Multi-turn sparring with provider-native resume.
-bin/sparctl ask-resume claude /tmp/claude-native.log "First question" /tmp/turn-1.txt
-bin/sparctl ask-resume claude /tmp/claude-native.log "Follow-up" /tmp/turn-2.txt
-bin/sparctl ask-resume codex /tmp/codex-native.log "First question" /tmp/codex-turn.txt
-bin/sparctl ask-resume codex /tmp/codex-native.log "Follow-up" /tmp/codex-turn.txt
+sparring/bin/sparctl ask-resume claude /tmp/claude-native.log "First question" /tmp/turn-1.txt
+sparring/bin/sparctl ask-resume claude /tmp/claude-native.log "Follow-up" /tmp/turn-2.txt
+sparring/bin/sparctl ask-resume codex /tmp/codex-native.log "First question" /tmp/codex-turn.txt
+sparring/bin/sparctl ask-resume codex /tmp/codex-native.log "Follow-up" /tmp/codex-turn.txt
 
 # Prefer print mode, fall back to tmux if needed.
-bin/sparctl ask-auto claude "Review this implementation" /tmp/claude-auto.txt
+sparring/bin/sparctl ask-auto claude "Review this implementation" /tmp/claude-auto.txt
 
 # Live tmux session, only when you want to watch or when print mode is unavailable.
-bin/sparctl start claude
+sparring/bin/sparctl start claude
 tmux attach -t spar-claude
-bin/sparctl stop claude
+sparring/bin/sparctl stop claude
 ```
 
 Run the full regression suite:
@@ -104,22 +103,16 @@ Run the full regression suite:
 bash test/run-all.sh
 ```
 
-Rebuild the packaged skill from the committed plaintext source:
-
-```bash
-bin/package-skill
-```
-
 ## Project Layout
 
 ```text
-bin/package-skill  rebuild dist/sparring.skill from sparring/SKILL.md
-bin/sparctl        print-first CLI plus tmux fallback controls
-lib/print-agent.sh claude -p / codex exec providers and session history
-lib/tmux-agent.sh  live tmux fallback primitives
-sparring/SKILL.md  plaintext skill source used for reviewable prompt diffs
-test/              smoke and regression tests
-dist/sparring.skill packaged skill
+sparring/SKILL.md           skill instructions
+sparring/bin/sparctl        print-first CLI plus tmux fallback controls
+sparring/bin/spar           two-agent demo dispatcher
+sparring/bin/mock-agent.sh  deterministic test/demo agent
+sparring/lib/print-agent.sh claude -p / codex exec providers and session history
+sparring/lib/tmux-agent.sh  live tmux fallback primitives
+test/                       smoke and regression tests
 ```
 
 ## Notes

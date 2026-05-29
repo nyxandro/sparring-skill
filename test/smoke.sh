@@ -11,8 +11,10 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
-# shellcheck source=../lib/tmux-agent.sh
-source "$ROOT/lib/tmux-agent.sh"
+SKILL_DIR="$ROOT/sparring"
+MOCK_AGENT="$SKILL_DIR/bin/mock-agent.sh"
+# shellcheck source=../sparring/lib/tmux-agent.sh
+source "$SKILL_DIR/lib/tmux-agent.sh"
 
 # Use a short think time so the test is quick but the spinner still animates.
 export MOCK_THINK_SECONDS=1
@@ -29,7 +31,7 @@ trap cleanup EXIT
 fail() { echo "SMOKE_FAIL: $1" >&2; exit 1; }
 
 # 1. Spawn a mock agent in a live tmux session.
-agent_spawn "$AGENT" "$ROOT/bin/mock-agent.sh $AGENT" || fail "could not spawn agent"
+agent_spawn "$AGENT" "$MOCK_AGENT $AGENT" || fail "could not spawn agent"
 sleep 1
 agent_running "$AGENT" || fail "session did not come up"
 
@@ -52,7 +54,7 @@ printf '%s' "$reply" | grep -qx "$TASK" \
   && fail "echoed prompt leaked into the cleaned reply (strip_echo regressed)"
 
 # 4. A real model can be silent before the first token; the idle detector must not stop early.
-agent_spawn "$DELAYED_AGENT" "env MOCK_THINK_SECONDS=1 MOCK_REPLY_DELAY_SECONDS=2 $ROOT/bin/mock-agent.sh $DELAYED_AGENT" \
+agent_spawn "$DELAYED_AGENT" "env MOCK_THINK_SECONDS=1 MOCK_REPLY_DELAY_SECONDS=2 $MOCK_AGENT $DELAYED_AGENT" \
   || fail "could not spawn delayed agent"
 sleep 1
 delayed_base="$(agent_linecount "$DELAYED_AGENT")"

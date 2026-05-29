@@ -5,7 +5,7 @@ description: Use when the user says "sparring" or asks to run a sparring session
 
 # Sparring
 
-Use this skill when the user wants a `sparring` session with another CLI agent. The skill turns requests like “run sparring with Claude”, “sparring my plan with Codex”, or “discuss this with Claude” into a concrete workflow through the local `sparring` harness.
+Use this skill when the user wants a `sparring` session with another CLI agent. The skill turns requests like “run sparring with Claude”, “sparring my plan with Codex”, or “discuss this with Claude” into a concrete workflow through the bundled `sparring` harness.
 
 Production rule: prefer print/exec mode first. Use `ask-resume` for multi-turn sparring when provider-native continuity matters; use `ask-session` when portable transcript replay is preferred. Use tmux only as a fallback or when the user explicitly wants a live attachable TUI session.
 
@@ -30,16 +30,17 @@ Do not use this skill for ordinary non-interactive shell commands where stdout a
 
 This skill expects:
 
-- The local `sparring` project with executable `bin/sparctl`.
+- The bundled `bin/sparctl`, `bin/spar`, `bin/mock-agent.sh`, `lib/print-agent.sh`, and `lib/tmux-agent.sh` files from this skill folder.
 - The requested opponent CLI installed, for example `claude` or `codex`.
 - `timeout` from GNU coreutils for print/exec calls.
 - `tmux` only when using live/fallback mode.
 
 Resolve the harness path in this order:
 
-1. If `SPARRING_HOME` is set, use `$SPARRING_HOME/bin/sparctl`.
-2. Otherwise, use `/home/nyx/projects/sparring/bin/sparctl` when it exists.
-3. If neither exists, report `SPARRING_HARNESS_MISSING` and ask where the sparring project is installed.
+1. Use this skill's own bundled harness: `<skill directory>/bin/sparctl`.
+2. If the runtime exposes a “Base directory for this skill” line, treat that directory as `<skill directory>`.
+3. If you are developing the skill locally and `SPARRING_HOME` is explicitly set, it may override the bundled path for testing only.
+4. If no executable bundled `bin/sparctl` exists, report `SPARRING_HARNESS_MISSING` and include the skill directory you checked.
 
 Do not silently fall back to raw tmux when `sparctl` is missing; the harness contains the tested print/session/fallback behavior.
 
@@ -75,13 +76,13 @@ If the CLI is missing, report it directly and do not substitute another agent si
 
 ## Preferred Harness Commands
 
-Use the resolved `sparctl` path. Examples below use `/home/nyx/projects/sparring/bin/sparctl`; replace it with `$SPARRING_HOME/bin/sparctl` when configured.
+Use the resolved bundled `sparctl` path. In examples below, `$SPARRING_HARNESS` means the executable at `<skill directory>/bin/sparctl`.
 
 ```bash
-/home/nyx/projects/sparring/bin/sparctl ask-print <name> "<prompt>" /tmp/<name>-print.txt
-/home/nyx/projects/sparring/bin/sparctl ask-session <name> /tmp/<name>-sparring.log "<prompt>" /tmp/<name>-turn.txt
-/home/nyx/projects/sparring/bin/sparctl ask-resume <name> /tmp/<name>-native.log "<prompt>" /tmp/<name>-turn.txt
-/home/nyx/projects/sparring/bin/sparctl ask-auto <name> "<prompt>" /tmp/<name>-auto.txt
+$SPARRING_HARNESS ask-print <name> "<prompt>" /tmp/<name>-print.txt
+$SPARRING_HARNESS ask-session <name> /tmp/<name>-sparring.log "<prompt>" /tmp/<name>-turn.txt
+$SPARRING_HARNESS ask-resume <name> /tmp/<name>-native.log "<prompt>" /tmp/<name>-turn.txt
+$SPARRING_HARNESS ask-auto <name> "<prompt>" /tmp/<name>-auto.txt
 ```
 
 Command meanings:
@@ -127,26 +128,26 @@ If the main agent's next turn contains doubts or objections to your position, do
 Claude native resume:
 
 ```bash
-/home/nyx/projects/sparring/bin/sparctl ask-resume claude /tmp/claude-native.log "<prompt>" /tmp/claude-turn.txt
+$SPARRING_HARNESS ask-resume claude /tmp/claude-native.log "<prompt>" /tmp/claude-turn.txt
 ```
 
 Codex native resume:
 
 ```bash
-/home/nyx/projects/sparring/bin/sparctl ask-resume codex /tmp/codex-native.log "<prompt>" /tmp/codex-turn.txt
+$SPARRING_HARNESS ask-resume codex /tmp/codex-native.log "<prompt>" /tmp/codex-turn.txt
 ```
 
 Portable transcript replay:
 
 ```bash
-/home/nyx/projects/sparring/bin/sparctl ask-session claude /tmp/claude-sparring.log "<prompt>" /tmp/claude-turn.txt
-/home/nyx/projects/sparring/bin/sparctl ask-session codex /tmp/codex-sparring.log "<prompt>" /tmp/codex-turn.txt
+$SPARRING_HARNESS ask-session claude /tmp/claude-sparring.log "<prompt>" /tmp/claude-turn.txt
+$SPARRING_HARNESS ask-session codex /tmp/codex-sparring.log "<prompt>" /tmp/codex-turn.txt
 ```
 
 Auto fallback:
 
 ```bash
-/home/nyx/projects/sparring/bin/sparctl ask-auto claude "<prompt>" /tmp/claude-auto.txt
+$SPARRING_HARNESS ask-auto claude "<prompt>" /tmp/claude-auto.txt
 ```
 
 ## Tmux Live/Fallback Mode
@@ -154,14 +155,14 @@ Auto fallback:
 Use tmux mode only when print/exec mode is unavailable, fails due limits/auth, or the user explicitly wants an attachable live session.
 
 ```bash
-/home/nyx/projects/sparring/bin/sparctl start [--replace] <session-name> <agent-command>
-/home/nyx/projects/sparring/bin/sparctl start claude
-/home/nyx/projects/sparring/bin/sparctl start --replace claude
-/home/nyx/projects/sparring/bin/sparctl send <session-name> "<single-line prompt>"
-/home/nyx/projects/sparring/bin/sparctl ask-delta <session-name> "<prompt>" /tmp/<session-name>-delta.txt
-/home/nyx/projects/sparring/bin/sparctl ask-watch <session-name> "<prompt>" /tmp/<session-name>-watch.txt
-/home/nyx/projects/sparring/bin/sparctl transcript <session-name> /tmp/<session-name>-transcript.txt
-/home/nyx/projects/sparring/bin/sparctl stop <session-name>
+$SPARRING_HARNESS start [--replace] <session-name> <agent-command>
+$SPARRING_HARNESS start claude
+$SPARRING_HARNESS start --replace claude
+$SPARRING_HARNESS send <session-name> "<single-line prompt>"
+$SPARRING_HARNESS ask-delta <session-name> "<prompt>" /tmp/<session-name>-delta.txt
+$SPARRING_HARNESS ask-watch <session-name> "<prompt>" /tmp/<session-name>-watch.txt
+$SPARRING_HARNESS transcript <session-name> /tmp/<session-name>-transcript.txt
+$SPARRING_HARNESS stop <session-name>
 ```
 
 Persistent starts are safe by default: `start <name>` fails if `spar-<name>` already exists. Use `--replace` only when intentionally killing and recreating that session. If `start` reports `SPAR_SPAWN_SESSION_EXISTS`, do not retry with `--replace` automatically; ask whether the user wants to attach, stop, or replace the existing session.
@@ -187,7 +188,7 @@ If the user asks for an ongoing tmux sparring session, leave it running and repo
 If the user asks for a quick tmux test, cleanup after the test:
 
 ```bash
-/home/nyx/projects/sparring/bin/sparctl stop <session-name>
+$SPARRING_HARNESS stop <session-name>
 ```
 
 ## Reporting Back

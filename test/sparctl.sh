@@ -18,8 +18,11 @@ export TMUX_BIN TMUX_SOCKET
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
-# shellcheck source=../lib/tmux-agent.sh
-source "$ROOT/lib/tmux-agent.sh"
+SKILL_DIR="$ROOT/sparring"
+SPARCTL="$SKILL_DIR/bin/sparctl"
+MOCK_AGENT="$SKILL_DIR/bin/mock-agent.sh"
+# shellcheck source=../sparring/lib/tmux-agent.sh
+source "$SKILL_DIR/lib/tmux-agent.sh"
 
 # Use a deterministic mock so this test never spends API tokens or depends on network access.
 export MOCK_THINK_SECONDS=1
@@ -83,34 +86,34 @@ trap cleanup EXIT
 fail() { echo "SPARCTL_SMOKE_FAIL: $1" >&2; exit 1; }
 
 # Start a persistent session and verify the wrapper reports the tmux session name.
-start_output="$($ROOT/bin/sparctl start "$AGENT" "$ROOT/bin/mock-agent.sh $AGENT")"
+start_output="$($SPARCTL start "$AGENT" "$MOCK_AGENT $AGENT")"
 printf '%s' "$start_output" | grep -q "tmux attach -t spar-$AGENT" \
   || fail "start output did not show how to attach"
 sleep 1
 agent_running "$AGENT" || fail "persistent session did not start"
 
 # A second persistent start must not destroy a human-owned session unless explicitly requested.
-if $ROOT/bin/sparctl start "$AGENT" "$ROOT/bin/mock-agent.sh $AGENT" >/dev/null 2>&1; then
+if $SPARCTL start "$AGENT" "$MOCK_AGENT $AGENT" >/dev/null 2>&1; then
   fail "start silently replaced an existing persistent session"
 fi
-$ROOT/bin/sparctl start --replace "$AGENT" "$ROOT/bin/mock-agent.sh $AGENT" >/dev/null
+$SPARCTL start --replace "$AGENT" "$MOCK_AGENT $AGENT" >/dev/null
 sleep 1
 agent_running "$AGENT" || fail "--replace did not restart the persistent session"
 
 # The replace flag is accepted after the agent name too, matching common CLI muscle memory.
-$ROOT/bin/sparctl start "$AGENT" --replace "$ROOT/bin/mock-agent.sh $AGENT" >/dev/null
+$SPARCTL start "$AGENT" --replace "$MOCK_AGENT $AGENT" >/dev/null
 sleep 1
 agent_running "$AGENT" || fail "post-name --replace did not restart the persistent session"
 
 # Ask through the persistent session and verify the cleaned answer is still readable.
-reply="$($ROOT/bin/sparctl ask "$AGENT" "$TASK")"
+reply="$($SPARCTL ask "$AGENT" "$TASK")"
 printf '%s' "$reply" | grep -q "\[$AGENT\] on: $TASK" \
   || fail "ask output did not include the mock answer"
 printf '%s' "$reply" | grep -q "verdict:" \
   || fail "ask output was truncated before the verdict"
 
 # Delta mode should save only the new reply rows, not the whole old session transcript.
-$ROOT/bin/sparctl ask-delta "$AGENT" "delta smoke" "$DELTA_FILE" >/dev/null
+$SPARCTL ask-delta "$AGENT" "delta smoke" "$DELTA_FILE" >/dev/null
 [ -s "$DELTA_FILE" ] || fail "ask-delta did not write a delta file"
 grep -q "\[$AGENT\] on: delta smoke" "$DELTA_FILE" \
   || fail "ask-delta output did not contain the new answer"
@@ -118,7 +121,7 @@ grep -q "\[$AGENT\] on: $TASK" "$DELTA_FILE" \
   && fail "ask-delta leaked the previous reply into the new delta"
 
 # Watch mode should spool changes while waiting and produce a readable file for long replies.
-$ROOT/bin/sparctl ask-watch "$AGENT" "watch smoke" "$WATCH_FILE" >/dev/null
+$SPARCTL ask-watch "$AGENT" "watch smoke" "$WATCH_FILE" >/dev/null
 [ -s "$WATCH_FILE" ] || fail "ask-watch did not write a watched transcript"
 grep -q "\[$AGENT\] on: watch smoke" "$WATCH_FILE" \
   || fail "ask-watch output did not contain the watched answer"
@@ -133,22 +136,22 @@ printf '  verdict: one-shot prompt received\n'
 sleep 30
 EOF
 chmod +x "$ONCE_CLI"
-$ROOT/bin/sparctl ask-once once-smoke "$ONCE_CLI" "one shot smoke" "$ONCE_FILE" >/dev/null
+$SPARCTL ask-once once-smoke "$ONCE_CLI" "one shot smoke" "$ONCE_FILE" >/dev/null
 [ -s "$ONCE_FILE" ] || fail "ask-once did not write a transcript"
 grep -q "\[once-smoke\] on: one shot smoke" "$ONCE_FILE" \
   || fail "ask-once output did not contain the initial prompt answer"
-$ROOT/bin/sparctl stop once-smoke
+$SPARCTL stop once-smoke
 
 # Export a transcript file; this is the long-answer escape hatch for paging/searching later.
-$ROOT/bin/sparctl transcript "$AGENT" "$OUT_FILE" >/dev/null
+$SPARCTL transcript "$AGENT" "$OUT_FILE" >/dev/null
 [ -s "$OUT_FILE" ] || fail "transcript file was not written"
 grep -q "\[$AGENT\] on: $TASK" "$OUT_FILE" \
   || fail "transcript file did not contain the answer"
 
 # List and stop commands make the persistent lifecycle explicit and scriptable.
-$ROOT/bin/sparctl sessions | grep -q "spar-$AGENT" \
+$SPARCTL sessions | grep -q "spar-$AGENT" \
   || fail "sessions output did not include the persistent agent"
-$ROOT/bin/sparctl stop "$AGENT"
+$SPARCTL stop "$AGENT"
 if agent_running "$AGENT"; then
   fail "stop did not tear down the persistent session"
 fi
@@ -162,22 +165,22 @@ tmux set-environment -g PATH "original-tmux-path-sentinel"
 for known_agent in claude codex; do
   cat > "$STALE_PATH_SHIM_DIR/$known_agent" <<EOF
 #!/usr/bin/env bash
-exec "$ROOT/bin/mock-agent.sh" stale-$known_agent
+exec "$MOCK_AGENT" stale-$known_agent
 EOF
   chmod +x "$STALE_PATH_SHIM_DIR/$known_agent"
   cat > "$PATH_SHIM_DIR/$known_agent" <<EOF
 #!/usr/bin/env bash
-exec "$ROOT/bin/mock-agent.sh" $known_agent
+exec "$MOCK_AGENT" $known_agent
 EOF
   chmod +x "$PATH_SHIM_DIR/$known_agent"
   tmux set-environment -g PATH "$STALE_PATH_SHIM_DIR:$ORIGINAL_PATH"
-  PATH="$PATH_SHIM_DIR:$PATH" $ROOT/bin/sparctl start "$known_agent" >/dev/null
+  PATH="$PATH_SHIM_DIR:$PATH" $SPARCTL start "$known_agent" >/dev/null
   sleep 1
   agent_running "$known_agent" || fail "start $known_agent did not resolve the command automatically"
-  screen="$($ROOT/bin/sparctl screen "$known_agent")"
+  screen="$($SPARCTL screen "$known_agent")"
   printf '%s' "$screen" | grep -q "╭─ $known_agent online ─╮" \
     || fail "start $known_agent used stale tmux PATH instead of current PATH resolution"
-  $ROOT/bin/sparctl stop "$known_agent"
+  $SPARCTL stop "$known_agent"
 done
 tmux set-environment -g PATH "original-tmux-path-sentinel"
 current_tmux_path="$(tmux show-environment -g PATH 2>/dev/null || true)"
@@ -198,12 +201,12 @@ fi
 mkdir -p "$CWD_PROBE_DIR"
 (
   cd "$CWD_PROBE_DIR"
-  $ROOT/bin/sparctl start cwd-probe "bash -lc 'printf \"cwd:%s\\n\" \"\$PWD\"; sleep 30'" >/dev/null
+  $SPARCTL start cwd-probe "bash -lc 'printf \"cwd:%s\\n\" \"\$PWD\"; sleep 30'" >/dev/null
 )
 sleep 1
-screen="$($ROOT/bin/sparctl screen cwd-probe)"
+screen="$($SPARCTL screen cwd-probe)"
 printf '%s' "$screen" | grep -q "cwd:$CWD_PROBE_DIR" \
   || fail "persistent session did not start in the caller working directory"
-$ROOT/bin/sparctl stop cwd-probe
+$SPARCTL stop cwd-probe
 
 echo "SPARCTL_SMOKE_OK: persistent start -> ask -> transcript -> sessions -> stop verified"
