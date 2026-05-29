@@ -2,7 +2,8 @@
 # print.sh — smoke tests for the primary non-interactive sparring backend.
 #
 # It verifies the production path that should be preferred over TUI scraping: Claude print mode,
-# Codex exec mode, file-backed dialogue history, and an explicit tmux fallback when print is absent.
+# Codex exec mode, native provider resume, file-backed dialogue history, and an explicit tmux
+# fallback when print is absent.
 
 set -euo pipefail
 
@@ -18,6 +19,10 @@ CLAUDE_OUT="$WORK_DIR/claude.txt"
 CODEX_OUT="$WORK_DIR/codex.txt"
 SESSION_OUT="$WORK_DIR/session.txt"
 SESSION_FILE="$WORK_DIR/session.log"
+CLAUDE_RESUME_OUT="$WORK_DIR/claude-resume.txt"
+CLAUDE_RESUME_STATE="$WORK_DIR/claude-resume.log"
+CODEX_RESUME_OUT="$WORK_DIR/codex-resume.txt"
+CODEX_RESUME_STATE="$WORK_DIR/codex-resume.log"
 AUTO_OUT="$WORK_DIR/auto.txt"
 EMPTY_OUT="$WORK_DIR/empty.txt"
 ORIGINAL_PATH="$PATH"
@@ -53,18 +58,33 @@ prompt="$(cat)"
 if [ "$prompt" = "empty smoke" ]; then
   exit 0
 fi
+if printf '%s' "$prompt" | grep -q "native claude first"; then
+  printf '%s\n' "$*" | grep -q -- "--session-id" || { echo "claude shim expected --session-id for first native resume turn" >&2; exit 1; }
+  printf '[claude-native-first] %s\n' "$prompt"
+  exit 0
+fi
+if printf '%s' "$prompt" | grep -q "native claude second"; then
+  printf '%s\n' "$*" | grep -q -- "--resume" || { echo "claude shim expected --resume for continued native turn" >&2; exit 1; }
+  printf '[claude-native-second] %s\n' "$prompt"
+  exit 0
+fi
 printf '[claude-print] %s\n' "$prompt"
 EOF
 cat > "$SHIM_DIR/codex" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[ "${1:-}" = "exec" ] || { echo "codex shim expected exec" >&2; exit 1; }
+original_args="$*"
+printf '%s\n' "$original_args" | grep -q -- "exec" || { echo "codex shim expected exec" >&2; exit 1; }
 out=""
+is_resume=0
+has_json=0
 has_sandbox=0
 has_skip_git=0
 has_color=0
 for arg in "$@"; do
   [ "$arg" = "--ask-for-approval" ] && { echo "codex shim rejects global approval flag in exec" >&2; exit 1; }
+  [ "$arg" = "resume" ] && is_resume=1
+  [ "$arg" = "--json" ] && has_json=1
   [ "$arg" = "--sandbox" ] && has_sandbox=1
   [ "$arg" = "--skip-git-repo-check" ] && has_skip_git=1
   [ "$arg" = "--color" ] && has_color=1
@@ -77,12 +97,28 @@ while [ "$#" -gt 0 ]; do
   fi
   shift
 done
-[ "$has_sandbox" = 1 ] || { echo "codex shim expected --sandbox" >&2; exit 1; }
 [ "$has_skip_git" = 1 ] || { echo "codex shim expected --skip-git-repo-check" >&2; exit 1; }
-[ "$has_color" = 1 ] || { echo "codex shim expected --color" >&2; exit 1; }
 [ -n "$out" ] || { echo "codex shim expected --output-last-message" >&2; exit 1; }
 prompt="$(cat)"
 [ -n "$prompt" ] || { echo "codex shim expected prompt on stdin" >&2; exit 1; }
+if [ "$prompt" = "native codex first" ]; then
+  [ "$has_json" = 1 ] || { echo "codex shim expected --json for first native resume turn" >&2; exit 1; }
+  [ "$has_sandbox" = 1 ] || { echo "codex shim expected --sandbox for first exec" >&2; exit 1; }
+  [ "$has_color" = 1 ] || { echo "codex shim expected --color for first exec" >&2; exit 1; }
+  printf '{"type":"thread.started","thread_id":"codex-native-thread"}\n'
+  printf '[codex-native-first] %s\n' "$prompt" > "$out"
+  exit 0
+fi
+if [ "$prompt" = "native codex second" ]; then
+  [ "$is_resume" = 1 ] || { echo "codex shim expected exec resume for continued native turn" >&2; exit 1; }
+  printf '%s\n' "$original_args" | grep -q -- "codex-native-thread" || { echo "codex shim expected stored thread id" >&2; exit 1; }
+  printf '%s\n' "$original_args" | grep -q -- "--sandbox read-only" || { echo "codex shim expected root read-only sandbox on resume" >&2; exit 1; }
+  printf '%s\n' "$original_args" | grep -q -- "-C " || { echo "codex shim expected cwd on resume" >&2; exit 1; }
+  printf '[codex-native-second] %s\n' "$prompt" > "$out"
+  exit 0
+fi
+[ "$has_sandbox" = 1 ] || { echo "codex shim expected --sandbox" >&2; exit 1; }
+[ "$has_color" = 1 ] || { echo "codex shim expected --color" >&2; exit 1; }
 printf '[codex-exec] %s\n' "$prompt" > "$out"
 EOF
 chmod +x "$SHIM_DIR/claude" "$SHIM_DIR/codex"
@@ -113,6 +149,21 @@ grep -q "first turn" "$SESSION_OUT" \
   || fail "second session prompt did not include previous context"
 grep -q "USER: second turn" "$SESSION_FILE" \
   || fail "session file did not record the second user turn"
+
+# Native resume mode should continue through provider-owned sessions rather than prompt replay.
+$ROOT/bin/sparctl ask-resume claude "$CLAUDE_RESUME_STATE" "native claude first" "$CLAUDE_RESUME_OUT" >/dev/null
+grep -q "session_id=" "$CLAUDE_RESUME_STATE" \
+  || fail "claude native resume state did not store a session id"
+$ROOT/bin/sparctl ask-resume claude "$CLAUDE_RESUME_STATE" "native claude second" "$CLAUDE_RESUME_OUT" >/dev/null
+grep -q "\[claude-native-second\] native claude second" "$CLAUDE_RESUME_OUT" \
+  || fail "claude native resume did not continue through --resume"
+
+$ROOT/bin/sparctl ask-resume codex "$CODEX_RESUME_STATE" "native codex first" "$CODEX_RESUME_OUT" >/dev/null
+grep -q "session_id=codex-native-thread" "$CODEX_RESUME_STATE" \
+  || fail "codex native resume state did not store the JSON thread id"
+$ROOT/bin/sparctl ask-resume codex "$CODEX_RESUME_STATE" "native codex second" "$CODEX_RESUME_OUT" >/dev/null
+grep -q "\[codex-native-second\] native codex second" "$CODEX_RESUME_OUT" \
+  || fail "codex native resume did not continue through exec resume"
 
 # Auto mode should prefer print, but fall back to tmux when no print provider exists for the name.
 SPAR_AGENT_CMD="$ROOT/bin/mock-agent.sh $AGENT" $ROOT/bin/sparctl ask-auto "$AGENT" "fallback smoke" "$AUTO_OUT" >/dev/null

@@ -8,6 +8,7 @@
 #   Functions:
 #     print_agent_run          run claude -p / codex exec and write the answer to a file
 #     print_agent_session_run  build a rolling-history prompt, run the provider, append transcript
+#     print_agent_resume_run   run provider-native resume while keeping a local audit transcript
 
 # --- Configuration constants --------------------------------------------------------
 SPAR_PRINT_TIMEOUT="${SPAR_PRINT_TIMEOUT:-300}"             # seconds per print/exec call
@@ -68,6 +69,58 @@ _print_command_for_name() {
       return 1
       ;;
   esac
+}
+
+# Linux exposes a kernel UUID source, avoiding an extra uuidgen dependency in the harness.
+_print_generate_uuid() {
+  if [ -r /proc/sys/kernel/random/uuid ]; then
+    tr -d '\n' < /proc/sys/kernel/random/uuid
+    return 0
+  fi
+  echo "SPAR_PRINT_UUID_SOURCE_MISSING: /proc/sys/kernel/random/uuid is required for Claude native resume" >&2
+  return 1
+}
+
+# Read a simple key=value field from the native resume audit file.
+_print_resume_state_value() {
+  local state="$1" key="$2"
+  [ -f "$state" ] || return 0
+  awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$state"
+}
+
+# Native resume state is provider-specific; mixing providers would resume the wrong CLI session.
+_print_resume_validate_state() {
+  local name="$1" state="$2" stored_provider
+  stored_provider="$(_print_resume_state_value "$state" provider)"
+  if [ -n "$stored_provider" ] && [ "$stored_provider" != "$name" ]; then
+    echo "SPAR_PRINT_RESUME_PROVIDER_MISMATCH: state belongs to '$stored_provider', not '$name'" >&2
+    return 1
+  fi
+}
+
+# Extract the first known Codex session identifier from JSONL emitted by `codex exec --json`.
+_print_extract_codex_session_id() {
+  local events="$1"
+  sed -nE 's/.*"(session_id|thread_id|conversation_id)"[[:space:]]*:[[:space:]]*"([^"]+)".*/\2/p' "$events" \
+    | awk 'NF { print; exit }'
+}
+
+# Append/update local audit state after a successful provider-native turn.
+_print_append_resume_audit() {
+  local name="$1" state="$2" session_id="$3" prompt="$4" out="$5"
+  if [ ! -f "$state" ]; then
+    {
+      printf 'provider=%s\n' "$name"
+      printf 'session_id=%s\n' "$session_id"
+      printf 'created_at=%s\n' "$(date -Is)"
+    } > "$state"
+  fi
+  {
+    printf '\nUSER: %s\n' "$prompt"
+    printf 'ASSISTANT(%s native:%s):\n' "$name" "$session_id"
+    cat "$out"
+    printf '\n'
+  } >> "$state"
 }
 
 # --- Public API ---------------------------------------------------------------------
@@ -140,4 +193,76 @@ print_agent_session_run() {
     cat "$out"
     printf '\n'
   } >> "$session"
+}
+
+# print_agent_resume_run <name> <state-file> <prompt> <output-file>
+# Use the provider's own persisted conversation instead of replaying transcript text. The state file
+# stores only the provider session id plus an audit transcript for humans and future debugging.
+print_agent_resume_run() {
+  local name="$1" state="$2" prompt="$3" out="$4" exe tmp events session_id is_first_turn
+  if [ -z "$name" ] || [ -z "$state" ] || [ -z "$prompt" ] || [ -z "$out" ]; then
+    echo "SPAR_PRINT_RESUME_BAD_ARGS: print_agent_resume_run needs <name> <state-file> <prompt> <output-file>" >&2
+    return 1
+  fi
+  _print_require_parent "$state" "SPAR_PRINT_RESUME_STATE_PARENT_MISSING" || return 1
+  _print_require_parent "$out" "SPAR_PRINT_RESUME_OUTPUT_PARENT_MISSING" || return 1
+  _print_require_timeout || return 1
+  _print_resume_validate_state "$name" "$state" || return 1
+  exe="$(_print_command_for_name "$name")" || return 1
+  tmp="$(_print_make_tmp_for_output "$out")"
+  events="$(_print_make_tmp_for_output "$out.events")"
+  session_id="$(_print_resume_state_value "$state" session_id)"
+  is_first_turn=0
+
+  # Claude can start with a caller-chosen UUID, so no JSON parsing is needed for the first turn.
+  case "$name" in
+    claude)
+      if [ -z "$session_id" ]; then
+        session_id="$(_print_generate_uuid)" || { rm -f "$tmp" "$events"; return 1; }
+        is_first_turn=1
+      fi
+      if [ "$is_first_turn" = 1 ]; then
+        if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" -p --permission-mode plan \
+          --output-format text --session-id "$session_id" > "$tmp"; then
+          rm -f "$tmp" "$events"
+          echo "SPAR_PRINT_RESUME_PROVIDER_FAILED: claude first native turn failed for agent '$name'" >&2
+          return 1
+        fi
+      else
+        if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" -p --permission-mode plan \
+          --output-format text --resume "$session_id" > "$tmp"; then
+          rm -f "$tmp" "$events"
+          echo "SPAR_PRINT_RESUME_PROVIDER_FAILED: claude native resume failed for agent '$name'" >&2
+          return 1
+        fi
+      fi
+      ;;
+    codex)
+      if [ -z "$session_id" ]; then
+        if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only \
+          -C "$PWD" exec --skip-git-repo-check --color never --json --output-last-message "$tmp" - > "$events"; then
+          rm -f "$tmp" "$events"
+          echo "SPAR_PRINT_RESUME_PROVIDER_FAILED: codex first native turn failed for agent '$name'" >&2
+          return 1
+        fi
+        session_id="$(_print_extract_codex_session_id "$events")"
+        if [ -z "$session_id" ]; then
+          rm -f "$tmp" "$events"
+          echo "SPAR_PRINT_RESUME_SESSION_ID_MISSING: codex --json did not emit a session/thread id" >&2
+          return 1
+        fi
+      else
+        if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only \
+          -C "$PWD" exec resume --skip-git-repo-check --json --output-last-message "$tmp" "$session_id" - > "$events"; then
+          rm -f "$tmp" "$events"
+          echo "SPAR_PRINT_RESUME_PROVIDER_FAILED: codex native resume failed for agent '$name'" >&2
+          return 1
+        fi
+      fi
+      ;;
+  esac
+
+  _print_commit_answer "$tmp" "$out" "$name" || { rm -f "$events"; return 1; }
+  _print_append_resume_audit "$name" "$state" "$session_id" "$prompt" "$out"
+  rm -f "$events"
 }

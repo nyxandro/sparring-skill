@@ -4,6 +4,7 @@
 # Table of contents (key commands):
 #   ask-print   ask a non-interactive provider (Claude -p / Codex exec)
 #   ask-session ask a non-interactive provider with file-backed sparring history
+#   ask-resume  ask a non-interactive provider with provider-native session resume
 #   ask-auto    prefer ask-print and fall back to tmux when print is unavailable
 #   start       create a persistent tmux session for an interactive agent
 #   send        type one prompt into an existing session without waiting
@@ -36,6 +37,7 @@ usage() {
 Usage:
   bin/sparctl ask-print <name> <text> <output-file>
   bin/sparctl ask-session <name> <session-file> <text> <output-file>
+  bin/sparctl ask-resume <name> <state-file> <text> <output-file>
   bin/sparctl ask-auto <name> <text> <output-file>
   bin/sparctl start [--replace] [name] [agent command]
   bin/sparctl send <name> <text>
@@ -54,6 +56,7 @@ Examples:
   bin/sparctl ask-print claude "Ответь коротко: ping" /tmp/claude-print.txt
   bin/sparctl ask-print codex "Покритикуй план" /tmp/codex-exec.txt
   bin/sparctl ask-session claude /tmp/sparring-session.log "Продолжим спор" /tmp/claude-turn.txt
+  bin/sparctl ask-resume claude /tmp/sparring-claude-native.log "Продолжим через native resume" /tmp/claude-turn.txt
   bin/sparctl ask-auto claude "Дай независимый review" /tmp/claude-auto.txt
   bin/sparctl start claude
   bin/sparctl start --replace claude
@@ -127,6 +130,19 @@ case "$cmd" in
     lines="$(awk 'END { print NR }' "$out")"
     bytes="$(wc -c < "$out" | tr -d '[:space:]')"
     printf 'wrote session answer: %s (%s lines, %s bytes); session: %s\n' "$out" "$lines" "$bytes" "$session"
+    ;;
+
+  ask-resume)
+    # Native resume uses the provider's persisted conversation id and keeps a local audit log.
+    name="${1:-}"; state="${2:-}"; text="${3:-}"; out="${4:-}"
+    require_arg "$name" "SPARCTL_ASK_RESUME_BAD_ARGS: ask-resume needs <name> <state-file> <text> <output-file>"
+    require_arg "$state" "SPARCTL_ASK_RESUME_BAD_ARGS: ask-resume needs <name> <state-file> <text> <output-file>"
+    require_arg "$text" "SPARCTL_ASK_RESUME_BAD_ARGS: ask-resume needs <name> <state-file> <text> <output-file>"
+    require_arg "$out" "SPARCTL_ASK_RESUME_BAD_ARGS: ask-resume needs <name> <state-file> <text> <output-file>"
+    print_agent_resume_run "$name" "$state" "$text" "$out"
+    lines="$(awk 'END { print NR }' "$out")"
+    bytes="$(wc -c < "$out" | tr -d '[:space:]')"
+    printf 'wrote native resume answer: %s (%s lines, %s bytes); state: %s\n' "$out" "$lines" "$bytes" "$state"
     ;;
 
   ask-auto)

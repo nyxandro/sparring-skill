@@ -37,6 +37,8 @@ The production path is print-first:
 - Claude is called through `claude -p`.
 - Codex is called through `codex exec`.
 - Multi-turn sparring keeps a small local session history and sends it as context on the next turn.
+- Native-resume sparring can instead continue the provider's own saved session with `claude --resume`
+  or `codex exec resume`, while keeping a local audit transcript.
 - Temporary output files are deleted after they are read unless you explicitly ask to keep them.
 
 There is also a tmux fallback for live interactive agents. Use it only when print mode is not
@@ -80,6 +82,12 @@ bin/sparctl ask-print claude "Review this plan" /tmp/claude.txt
 # Multi-turn sparring with local history.
 bin/sparctl ask-session claude /tmp/sparring.log "First question" /tmp/turn-1.txt
 bin/sparctl ask-session claude /tmp/sparring.log "Follow-up" /tmp/turn-2.txt
+
+# Multi-turn sparring with provider-native resume.
+bin/sparctl ask-resume claude /tmp/claude-native.log "First question" /tmp/turn-1.txt
+bin/sparctl ask-resume claude /tmp/claude-native.log "Follow-up" /tmp/turn-2.txt
+bin/sparctl ask-resume codex /tmp/codex-native.log "First question" /tmp/codex-turn.txt
+bin/sparctl ask-resume codex /tmp/codex-native.log "Follow-up" /tmp/codex-turn.txt
 
 # Prefer print mode, fall back to tmux if needed.
 bin/sparctl ask-auto claude "Review this implementation" /tmp/claude-auto.txt
