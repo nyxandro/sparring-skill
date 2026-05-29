@@ -2,6 +2,8 @@
 
 ![Sparring Skill](./sparring.png)
 
+[![Download Skill](https://img.shields.io/badge/Download-sparring.skill-blue?style=for-the-badge)](https://github.com/nyxandro/sparring-skill/raw/main/dist/sparring.skill)
+
 Sparring Skill is for the moments when one model's answer is not enough.
 
 Ask your main agent to “do sparring with Claude” or “do sparring with Codex”, and it will ask the
