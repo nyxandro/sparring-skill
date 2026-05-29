@@ -108,8 +108,6 @@ bash test/run-all.sh
 ```text
 sparring/SKILL.md           skill instructions
 sparring/bin/sparctl        print-first CLI plus tmux fallback controls
-sparring/bin/spar           two-agent demo dispatcher
-sparring/bin/mock-agent.sh  deterministic test/demo agent
 sparring/lib/print-agent.sh claude -p / codex exec providers and session history
 sparring/lib/tmux-agent.sh  live tmux fallback primitives
 test/                       smoke and regression tests

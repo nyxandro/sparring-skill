@@ -11,13 +11,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
 SKILL_DIR="$ROOT/sparring"
 SPARCTL="$SKILL_DIR/bin/sparctl"
-MOCK_AGENT="$SKILL_DIR/bin/mock-agent.sh"
 # shellcheck source=../sparring/lib/tmux-agent.sh
 source "$SKILL_DIR/lib/tmux-agent.sh"
 
 AGENT="auto-print-smoke"
 WORK_DIR="${TMPDIR:-/tmp}/sparctl-print-${AGENT}"
 SHIM_DIR="$WORK_DIR/bin"
+TEST_AGENT="$WORK_DIR/test-agent.sh"
 CLAUDE_OUT="$WORK_DIR/claude.txt"
 CODEX_OUT="$WORK_DIR/codex.txt"
 SESSION_OUT="$WORK_DIR/session.txt"
@@ -43,6 +43,38 @@ fail() { echo "PRINT_SMOKE_FAIL: $1" >&2; exit 1; }
 
 # Build deterministic provider shims so tests never spend API tokens or depend on network access.
 mkdir -p "$SHIM_DIR"
+cat > "$TEST_AGENT" <<'EOF'
+#!/usr/bin/env bash
+set -u
+
+PERSONA="${1:-agent}"
+THINK_SECONDS="${MOCK_THINK_SECONDS:-1}"
+SPINNER_FRAMES='|/-'
+SPINNER_TICK=0.15
+
+printf '╭─ %s online ─╮\n' "$PERSONA"
+printf 'give me a task; /quit to exit\n\n'
+
+while :; do
+  printf '› '
+  IFS= read -r line || { printf '\n'; break; }
+  [ -z "$line" ] && continue
+  [ "$line" = "/quit" ] && { printf '%s signing off\n' "$PERSONA"; break; }
+
+  i=0
+  end=$((SECONDS + THINK_SECONDS))
+  while [ "$SECONDS" -lt "$end" ]; do
+    printf '\r%s thinking %s' "$PERSONA" "${SPINNER_FRAMES:i++%3:1}"
+    sleep "$SPINNER_TICK"
+  done
+  printf '\r\033[K'
+
+  short="${line:0:64}"
+  [ "${#line}" -gt 64 ] && short="${short}..."
+  printf '[%s] on: %s\n' "$PERSONA" "$short"
+  printf '  verdict: %s would commit, with the risk tracked\n\n' "$PERSONA"
+done
+EOF
 cat > "$SHIM_DIR/claude" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -130,7 +162,7 @@ fi
 [ "$has_color" = 1 ] || { echo "codex shim expected --color" >&2; exit 1; }
 printf '[codex-exec] %s\n' "$prompt" > "$out"
 EOF
-chmod +x "$SHIM_DIR/claude" "$SHIM_DIR/codex"
+chmod +x "$TEST_AGENT" "$SHIM_DIR/claude" "$SHIM_DIR/codex"
 export PATH="$SHIM_DIR:$ORIGINAL_PATH"
 
 # Claude print mode should run without tmux and write only the model answer to the output file.
@@ -185,7 +217,7 @@ grep -q "\[codex-native-second\] native codex second" "$CODEX_RESUME_OUT" \
   || fail "codex native resume did not continue through exec resume"
 
 # Auto mode should prefer print, but fall back to tmux when no print provider exists for the name.
-SPAR_AGENT_CMD="$MOCK_AGENT $AGENT" $SPARCTL ask-auto "$AGENT" "fallback smoke" "$AUTO_OUT" >/dev/null
+SPAR_AGENT_CMD="$TEST_AGENT $AGENT" $SPARCTL ask-auto "$AGENT" "fallback smoke" "$AUTO_OUT" >/dev/null
 grep -q "\[$AGENT\] on: fallback smoke" "$AUTO_OUT" \
   || fail "ask-auto did not fall back to the tmux backend"
 $SPARCTL stop "$AGENT"

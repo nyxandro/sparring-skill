@@ -12,7 +12,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
 SKILL_DIR="$ROOT/sparring"
-MOCK_AGENT="$SKILL_DIR/bin/mock-agent.sh"
+WORK_DIR="${TMPDIR:-/tmp}/sparring-smoke-$$"
+TEST_AGENT="$WORK_DIR/test-agent.sh"
 # shellcheck source=../sparring/lib/tmux-agent.sh
 source "$SKILL_DIR/lib/tmux-agent.sh"
 
@@ -25,13 +26,54 @@ TASK="ping the harness"
 DELAYED_TASK="ping after quiet delay"
 
 # Guarantee teardown regardless of outcome.
-cleanup() { agent_kill "$AGENT"; agent_kill "$DELAYED_AGENT"; }
+cleanup() { agent_kill "$AGENT"; agent_kill "$DELAYED_AGENT"; rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
 
 fail() { echo "SMOKE_FAIL: $1" >&2; exit 1; }
 
-# 1. Spawn a mock agent in a live tmux session.
-agent_spawn "$AGENT" "$MOCK_AGENT $AGENT" || fail "could not spawn agent"
+# Build the interactive test agent at runtime so the distributable skill has no mock payload.
+mkdir -p "$WORK_DIR"
+cat > "$TEST_AGENT" <<'EOF'
+#!/usr/bin/env bash
+set -u
+
+PERSONA="${1:-agent}"
+THINK_SECONDS="${MOCK_THINK_SECONDS:-1}"
+REPLY_DELAY_SECONDS="${MOCK_REPLY_DELAY_SECONDS:-0}"
+SPINNER_FRAMES='|/-'
+SPINNER_TICK=0.15
+
+printf '╭─ %s online ─╮\n' "$PERSONA"
+printf 'give me a task; /quit to exit\n\n'
+
+while :; do
+  printf '› '
+  IFS= read -r line || { printf '\n'; break; }
+  [ -z "$line" ] && continue
+  [ "$line" = "/quit" ] && { printf '%s signing off\n' "$PERSONA"; break; }
+
+  [ "$REPLY_DELAY_SECONDS" -gt 0 ] && sleep "$REPLY_DELAY_SECONDS"
+  i=0
+  end=$((SECONDS + THINK_SECONDS))
+  while [ "$SECONDS" -lt "$end" ]; do
+    printf '\r%s thinking %s' "$PERSONA" "${SPINNER_FRAMES:i++%3:1}"
+    sleep "$SPINNER_TICK"
+  done
+  printf '\r\033[K'
+
+  short="${line:0:64}"
+  [ "${#line}" -gt 64 ] && short="${short}..."
+  printf '[%s] on: %s\n' "$PERSONA" "$short"
+  printf '  - step 1: scope the smallest correct version (stays balanced)\n'
+  printf '  - step 2: name the one risk most likely to bite\n'
+  printf '  - step 3: define how we verify it actually works\n'
+  printf '  verdict: %s would commit, with the risk tracked\n\n' "$PERSONA"
+done
+EOF
+chmod +x "$TEST_AGENT"
+
+# 1. Spawn the generated test agent in a live tmux session.
+agent_spawn "$AGENT" "$TEST_AGENT $AGENT" || fail "could not spawn agent"
 sleep 1
 agent_running "$AGENT" || fail "session did not come up"
 
@@ -54,7 +96,7 @@ printf '%s' "$reply" | grep -qx "$TASK" \
   && fail "echoed prompt leaked into the cleaned reply (strip_echo regressed)"
 
 # 4. A real model can be silent before the first token; the idle detector must not stop early.
-agent_spawn "$DELAYED_AGENT" "env MOCK_THINK_SECONDS=1 MOCK_REPLY_DELAY_SECONDS=2 $MOCK_AGENT $DELAYED_AGENT" \
+agent_spawn "$DELAYED_AGENT" "env MOCK_THINK_SECONDS=1 MOCK_REPLY_DELAY_SECONDS=2 $TEST_AGENT $DELAYED_AGENT" \
   || fail "could not spawn delayed agent"
 sleep 1
 delayed_base="$(agent_linecount "$DELAYED_AGENT")"

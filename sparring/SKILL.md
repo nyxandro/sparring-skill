@@ -30,7 +30,7 @@ Do not use this skill for ordinary non-interactive shell commands where stdout a
 
 This skill expects:
 
-- The bundled `bin/sparctl`, `bin/spar`, `bin/mock-agent.sh`, `lib/print-agent.sh`, and `lib/tmux-agent.sh` files from this skill folder.
+- The bundled `bin/sparctl`, `lib/print-agent.sh`, and `lib/tmux-agent.sh` files from this skill folder.
 - The requested opponent CLI installed, for example `claude` or `codex`.
 - `timeout` from GNU coreutils for print/exec calls.
 - `tmux` only when using live/fallback mode.

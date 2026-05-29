@@ -20,7 +20,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
 SKILL_DIR="$ROOT/sparring"
 SPARCTL="$SKILL_DIR/bin/sparctl"
-MOCK_AGENT="$SKILL_DIR/bin/mock-agent.sh"
 # shellcheck source=../sparring/lib/tmux-agent.sh
 source "$SKILL_DIR/lib/tmux-agent.sh"
 
@@ -37,6 +36,7 @@ PATH_SHIM_DIR="${TMPDIR:-/tmp}/sparctl-path-${AGENT}"
 STALE_PATH_SHIM_DIR="${TMPDIR:-/tmp}/sparctl-stale-path-${AGENT}"
 CWD_PROBE_DIR="${TMPDIR:-/tmp}/sparctl-cwd-${AGENT}"
 ONCE_CLI="${TMPDIR:-/tmp}/sparctl-once-cli-${AGENT}.sh"
+TEST_AGENT="${TMPDIR:-/tmp}/sparctl-test-agent-${AGENT}.sh"
 ORIGINAL_PATH="$PATH"
 ORIGINAL_TMUX_PATH_WAS_SET=0
 ORIGINAL_TMUX_PATH=""
@@ -79,29 +79,67 @@ cleanup() {
   rm -rf "$STALE_PATH_SHIM_DIR"
   rm -rf "$CWD_PROBE_DIR"
   rm -f "$ONCE_CLI"
+  rm -f "$TEST_AGENT"
   "$TMUX_BIN" -L "$TMUX_SOCKET" kill-server 2>/dev/null || true
 }
 trap cleanup EXIT
 
 fail() { echo "SPARCTL_SMOKE_FAIL: $1" >&2; exit 1; }
 
+# Generate the interactive test agent locally so mock code never ships with the skill.
+cat > "$TEST_AGENT" <<'EOF'
+#!/usr/bin/env bash
+set -u
+
+PERSONA="${1:-agent}"
+THINK_SECONDS="${MOCK_THINK_SECONDS:-1}"
+SPINNER_FRAMES='|/-'
+SPINNER_TICK=0.15
+
+printf '╭─ %s online ─╮\n' "$PERSONA"
+printf 'give me a task; /quit to exit\n\n'
+
+while :; do
+  printf '› '
+  IFS= read -r line || { printf '\n'; break; }
+  [ -z "$line" ] && continue
+  [ "$line" = "/quit" ] && { printf '%s signing off\n' "$PERSONA"; break; }
+
+  i=0
+  end=$((SECONDS + THINK_SECONDS))
+  while [ "$SECONDS" -lt "$end" ]; do
+    printf '\r%s thinking %s' "$PERSONA" "${SPINNER_FRAMES:i++%3:1}"
+    sleep "$SPINNER_TICK"
+  done
+  printf '\r\033[K'
+
+  short="${line:0:64}"
+  [ "${#line}" -gt 64 ] && short="${short}..."
+  printf '[%s] on: %s\n' "$PERSONA" "$short"
+  printf '  - step 1: scope the smallest correct version (stays balanced)\n'
+  printf '  - step 2: name the one risk most likely to bite\n'
+  printf '  verdict: %s would commit, with the risk tracked\n\n' "$PERSONA"
+done
+EOF
+chmod +x "$TEST_AGENT"
+
 # Start a persistent session and verify the wrapper reports the tmux session name.
-start_output="$($SPARCTL start "$AGENT" "$MOCK_AGENT $AGENT")"
+start_output="$($SPARCTL start "$AGENT" "$TEST_AGENT $AGENT")"
 printf '%s' "$start_output" | grep -q "tmux attach -t spar-$AGENT" \
   || fail "start output did not show how to attach"
 sleep 1
 agent_running "$AGENT" || fail "persistent session did not start"
 
 # A second persistent start must not destroy a human-owned session unless explicitly requested.
-if $SPARCTL start "$AGENT" "$MOCK_AGENT $AGENT" >/dev/null 2>&1; then
+if $SPARCTL start "$AGENT" "$TEST_AGENT $AGENT" >/dev/null 2>&1; then
   fail "start silently replaced an existing persistent session"
 fi
-$SPARCTL start --replace "$AGENT" "$MOCK_AGENT $AGENT" >/dev/null
+$SPARCTL start --replace "$AGENT" "$TEST_AGENT $AGENT" >/dev/null
 sleep 1
 agent_running "$AGENT" || fail "--replace did not restart the persistent session"
 
 # The replace flag is accepted after the agent name too, matching common CLI muscle memory.
-$SPARCTL start "$AGENT" --replace "$MOCK_AGENT $AGENT" >/dev/null
+$SPARCTL start "$AGENT" --replace "$TEST_AGENT $AGENT" >/dev/null
 sleep 1
 agent_running "$AGENT" || fail "post-name --replace did not restart the persistent session"
 
@@ -165,12 +203,12 @@ tmux set-environment -g PATH "original-tmux-path-sentinel"
 for known_agent in claude codex; do
   cat > "$STALE_PATH_SHIM_DIR/$known_agent" <<EOF
 #!/usr/bin/env bash
-exec "$MOCK_AGENT" stale-$known_agent
+exec "$TEST_AGENT" stale-$known_agent
 EOF
   chmod +x "$STALE_PATH_SHIM_DIR/$known_agent"
   cat > "$PATH_SHIM_DIR/$known_agent" <<EOF
 #!/usr/bin/env bash
-exec "$MOCK_AGENT" $known_agent
+exec "$TEST_AGENT" $known_agent
 EOF
   chmod +x "$PATH_SHIM_DIR/$known_agent"
   tmux set-environment -g PATH "$STALE_PATH_SHIM_DIR:$ORIGINAL_PATH"
