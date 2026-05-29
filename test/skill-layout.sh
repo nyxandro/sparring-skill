@@ -45,6 +45,22 @@ grep -q 'Do not use `ask-resume` for a new sparring request or first turn' "$SKI
 if grep -q '`ask-print`' "$SKILL_DIR/SKILL.md"; then
   fail "SKILL.md still recommends ask-print in the user-facing workflow"
 fi
+
+# Opponent prompts must keep answers in the harness output, not in ad-hoc files the main agent
+# may forget to read before ending the sparring loop.
+grep -q 'Do not create files' "$SKILL_DIR/SKILL.md" \
+  || fail "SKILL.md does not forbid opponent-side file creation"
+grep -q 'answer directly in the provider response' "$SKILL_DIR/SKILL.md" \
+  || fail "SKILL.md does not require direct opponent answers"
+
+# The sparring loop should continue when new evidence or contradictions can still improve the
+# decision; otherwise a single opponent answer collapses into a premature report.
+grep -q 'Continue/Stop Gate' "$SKILL_DIR/SKILL.md" \
+  || fail "SKILL.md does not define a continue/stop gate"
+grep -q 'factual claim that conflicts with observed evidence' "$SKILL_DIR/SKILL.md" \
+  || fail "SKILL.md does not force follow-up on contradicted factual claims"
+grep -q 'blocker or high-severity risk that was not independently verified' "$SKILL_DIR/SKILL.md" \
+  || fail "SKILL.md does not force follow-up on unverified blocker claims"
 # The downloadable archive is the release artifact, so it must match the source skill folder.
 ARCHIVE="$ROOT/dist/sparring.skill"
 EXTRACTED_DIR="${TMPDIR:-/tmp}/sparring-skill-layout-$$"

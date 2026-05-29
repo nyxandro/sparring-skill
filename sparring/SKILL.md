@@ -97,7 +97,7 @@ Non-interactive providers receive prompts through stdin, not argv. This keeps lo
 Use this loop for planning, architecture discussion, brainstorming, second opinions, code review, and normal dialogue:
 
 1. Resolve the opponent backend from the user's wording and available CLI tools. If the user names only a model family without a clear CLI backend, ask one short clarification instead of guessing.
-2. Build a prompt in the user's language asking for an independent response that follows the structured sparring protocol below. Remind the opponent to counter the common model tendency to be agreeable: their role is to test the task critically, not to please the user or the main agent.
+2. Build a prompt in the user's language asking for an independent response that follows the structured sparring protocol below. Tell the opponent to answer directly in the provider response, not by creating files, plans, notes, or other artifacts. Remind the opponent to counter the common model tendency to be agreeable: their role is to test the task critically, not to please the user or the main agent.
 3. Use `ask-session` by default for a fresh sparring request, with a unique temporary session file. Do not use `ask-resume` for a new sparring request or first turn: provider-native resume can continue stale CLI context if the state file already exists. Use `ask-resume` only when explicitly continuing a provider-native session state that this sparring flow created and intentionally kept.
 4. Read the output file and compare the opponent's answer with your own position: what you accept, what you reject, what remains disputed, and what new questions appeared.
 5. If required user data is missing, stop the sparring instead of debating on invented assumptions. Return to the user with a concise question list explaining what data is needed, why it matters, and which decisions are blocked.
@@ -108,6 +108,24 @@ Use this loop for planning, architecture discussion, brainstorming, second opini
 10. If continuing the debate, keep the same `ask-session` transcript file and send the next turn through it. Use an `ask-resume` state file only if this sparring flow already started in native-resume mode and the user intentionally wants that provider-native continuation.
 11. If the sparring is finished, delete the state/session file too unless the user explicitly asks to keep it.
 12. Answer the user with a structured synthesis, not a raw transcript.
+
+## Opponent Output Rules
+
+The opponent must answer directly in the provider response captured by the harness. Do not ask the opponent to create files, write plans, save notes, update repository files, or put the full answer somewhere else for later reading. The harness already writes the provider response to the configured output file; extra opponent-created artifacts make the sparring loop easy to misread or prematurely stop.
+
+If the opponent says it needs to reference evidence, it should quote or summarize the relevant evidence in the direct answer. If the opponent cannot answer without missing data, it should list the missing data directly in the answer instead of creating a separate file or asking the main agent to inspect an artifact.
+
+## Continue/Stop Gate
+
+After every opponent answer, explicitly decide whether another sparring turn is useful. Continue the sparring when the next turn can still change the recommendation, especially when any of these are true:
+
+- The opponent made a factual claim that conflicts with observed evidence.
+- The opponent named a blocker or high-severity risk that was not independently verified.
+- The opponent skipped a disputed point, gave an evasive answer, or answered too shallowly for the risk level.
+- Your own verification after the opponent answer produced new evidence that the opponent has not addressed.
+- The opponent's recommendation depends on a trade-off that remains unresolved and material.
+
+Stop the sparring only when the key claims are verified or clearly marked as unverified, high-impact disagreements are resolved or preserved as explicit trade-offs, and another turn is unlikely to improve the decision. Do not turn the first opponent answer into a final user-facing synthesis when the gate says a focused rebuttal would still be useful.
 
 ## Structured Sparring Protocol
 
@@ -127,6 +145,8 @@ For the opponent prompt, adapt this shape into the user's language:
 <User task in the original language>
 
 You are the second participant in a sparring session. Do not accept the framing automatically: check whether the task is understood correctly, challenge weak assumptions, identify unnecessary complexity, and then answer the concrete request. Also check whether the proposed approaches, patterns, libraries, APIs, and tooling are current rather than outdated; when freshness matters and you have web access, use web search or current documentation before recommending a solution. Answer in the same language as the user's task. Do not edit files.
+
+Do not create files, plans, notes, or other artifacts. Put the full answer directly in this response. If you need to cite evidence, quote or summarize it here instead of writing it elsewhere.
 
 First fix the subject of discussion: restate the understood task, main goal, important constraints, and key assumptions. Then check the high-level framing, freshness of approaches/tools, and possible simplifications. After that, list the disputed points that should be challenged or decided before a final conclusion.
 
