@@ -1,5 +1,7 @@
 # Sparring Skill
 
+![Sparring Skill](./sparring.png)
+
 Sparring Skill is for the moments when one model's answer is not enough.
 
 Ask your main agent to “do sparring with Claude” or “do sparring with Codex”, and it will ask the
