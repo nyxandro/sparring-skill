@@ -17,10 +17,10 @@ Use it for:
 The normal workflow is intentionally simple:
 
 ```text
-Проведи sparring с Клодом по этому плану.
-Поспорингуй реализацию с Codex.
-Дай второе мнение через sparring.
-Обсуди эту архитектуру с Claude.
+Do sparring with Claude on this plan.
+Run a sparring review with Codex.
+Get a second opinion through sparring.
+Discuss this architecture with Claude.
 ```
 
 The skill handles the mechanics: chooses the right CLI command, writes temporary answer files,
