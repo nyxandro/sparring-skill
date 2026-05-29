@@ -18,6 +18,7 @@
 #   Functions:
 #     agent_session_name public tmux session id for attach/listing output
 #     agent_spawn      launch a full interactive agent in a detached tmux session
+#     agent_prepare_input flatten multi-line prompts before TUI submission
 #     agent_send       "type" a single line into the agent's input box and submit it
 #     agent_snapshot   render the visible pane to plain text (tmux already strips ANSI)
 #     agent_wait_idle  block until the agent's screen stabilises (the real "done" signal)
@@ -116,19 +117,25 @@ agent_spawn() {
   fi
 }
 
+# agent_prepare_input <text>
+# TUIs submit on Enter, so a multi-line prompt must become one line before send-keys runs.
+agent_prepare_input() {
+  printf '%s' "$1" | awk 'BEGIN { first = 1 } { gsub(/\r/, ""); if (!first) printf " "; printf "%s", $0; first = 0 }'
+}
+
 # agent_send <name> <text>
 # Deliver a single line of input to the agent exactly as if a human typed it and pressed Enter.
-# Note: this sends ONE line. Multi-line prompts would submit at the first newline in a readline
-# box, so callers must flatten multi-line content before sending (see README, "known limits").
+# Note: this sends ONE line. Multi-line prompts are flattened here to avoid accidental extra turns.
 agent_send() {
-  local name="$1" text="$2" sess
+  local name="$1" text="$2" sess send_text
   sess="$(_agent_session "$name")"
   if ! agent_running "$name"; then
     echo "SPAR_SEND_NO_SESSION: agent '$name' is not running; cannot deliver input" >&2
     return 1
   fi
+  send_text="$(agent_prepare_input "$text")"
   # -l sends the text literally (no key-name interpretation); Enter is sent as a separate keypress.
-  tmux send-keys -t "$sess" -l -- "$text"
+  tmux send-keys -t "$sess" -l -- "$send_text"
   tmux send-keys -t "$sess" Enter
 }
 

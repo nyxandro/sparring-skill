@@ -69,20 +69,25 @@ valid. Restart OpenCode or Claude Code after updating the skill.
 
 ## Requirements
 
-- Bash 4+.
+- Linux with Bash 4+.
 - GNU `timeout` for print mode.
 - `claude` and/or `codex` installed and authenticated.
 - `tmux` only for fallback/live mode.
+
+## Known Limits
+
+- Print mode is the reliable production path; tmux mode is a fallback for interactive TUIs.
+- Tmux input is submitted as one line. Multi-line prompts are flattened before sending so they do
+  not become multiple accidental turns.
+- Tmux completion is detected by screen stability, not by a provider event. Very long pauses inside
+  a TUI response can still be ambiguous; use transcript export for long answers.
 
 ## Developer Commands
 
 Most users do not need these directly; the skill calls them for you.
 
 ```bash
-# One-off second opinion.
-sparring/bin/sparctl ask-print claude "Review this plan" /tmp/claude.txt
-
-# Multi-turn sparring with local history.
+# Sparring with local history.
 sparring/bin/sparctl ask-session claude /tmp/sparring.log "First question" /tmp/turn-1.txt
 sparring/bin/sparctl ask-session claude /tmp/sparring.log "Follow-up" /tmp/turn-2.txt
 

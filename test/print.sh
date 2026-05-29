@@ -27,6 +27,7 @@ CLAUDE_RESUME_STATE="$WORK_DIR/claude-resume.log"
 CODEX_RESUME_OUT="$WORK_DIR/codex-resume.txt"
 CODEX_RESUME_STATE="$WORK_DIR/codex-resume.log"
 AUTO_OUT="$WORK_DIR/auto.txt"
+AUTO_MULTILINE_OUT="$WORK_DIR/auto-multiline.txt"
 EMPTY_OUT="$WORK_DIR/empty.txt"
 PROVIDER_FAIL_OUT="$WORK_DIR/provider-fail.txt"
 PROVIDER_FAIL_ERR="$WORK_DIR/provider-fail.err"
@@ -198,6 +199,9 @@ grep -q "USER: first turn" "$SESSION_FILE" \
 $SPARCTL ask-session claude "$SESSION_FILE" "second turn" "$SESSION_OUT" >/dev/null
 grep -q "first turn" "$SESSION_OUT" \
   || fail "second session prompt did not include previous context"
+if grep -q "Ты участвуешь\|История sparring-сессии\|Новый запрос пользователя" "$SESSION_OUT"; then
+  fail "session prompt injected Russian-only hidden instructions"
+fi
 grep -q "USER: second turn" "$SESSION_FILE" \
   || fail "session file did not record the second user turn"
 
@@ -220,6 +224,14 @@ grep -q "\[codex-native-second\] native codex second" "$CODEX_RESUME_OUT" \
 SPAR_AGENT_CMD="$TEST_AGENT $AGENT" $SPARCTL ask-auto "$AGENT" "fallback smoke" "$AUTO_OUT" >/dev/null
 grep -q "\[$AGENT\] on: fallback smoke" "$AUTO_OUT" \
   || fail "ask-auto did not fall back to the tmux backend"
+$SPARCTL stop "$AGENT"
+
+# Tmux fallback receives one submitted line, so ask-auto must flatten multiline prompts safely.
+SPAR_AGENT_CMD="$TEST_AGENT $AGENT" $SPARCTL ask-auto "$AGENT" $'fallback first\r\nfallback second' "$AUTO_MULTILINE_OUT" >/dev/null
+grep -q "\[$AGENT\] on: fallback first fallback second" "$AUTO_MULTILINE_OUT" \
+  || fail "ask-auto did not flatten multiline prompts for tmux fallback"
+grep -q "\[$AGENT\] on: fallback second" "$AUTO_MULTILINE_OUT" \
+  && fail "ask-auto submitted a multiline prompt as multiple tmux turns"
 $SPARCTL stop "$AGENT"
 
 echo "PRINT_SMOKE_OK: print providers -> session history -> tmux fallback verified"

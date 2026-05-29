@@ -29,9 +29,35 @@ done
 [ ! -e "$SKILL_DIR/bin/mock-agent.sh" ] || fail "test mock-agent leaked into the skill"
 [ ! -e "$SKILL_DIR/bin/spar" ] || fail "demo dispatcher leaked into the skill"
 
-# The instructions must not require the author's local checkout path to run.
-if grep -q '/home/nyx/projects/sparring' "$SKILL_DIR/SKILL.md"; then
-  fail "SKILL.md still points at the author's local checkout"
+# The instructions must not require the author's local checkout paths to run.
+if grep -R -q '/home/[^`[:space:]]*/projects/' "$SKILL_DIR/SKILL.md" "$ROOT/README.md"; then
+  fail "documentation still points at an author's local checkout"
 fi
+
+# Fresh sparring must not default to provider-native resume because stale state can leak context.
+if grep -q 'Use `ask-resume` by default' "$SKILL_DIR/SKILL.md"; then
+  fail "SKILL.md still makes ask-resume the default for fresh sparring"
+fi
+grep -q 'Use `ask-session` by default for fresh multi-turn debate' "$SKILL_DIR/SKILL.md" \
+  || fail "SKILL.md does not define ask-session as the fresh multi-turn default"
+grep -q 'Do not use `ask-resume` for a new review or first turn' "$SKILL_DIR/SKILL.md" \
+  || fail "SKILL.md does not warn against ask-resume on a first turn"
+if grep -q '`ask-print`' "$SKILL_DIR/SKILL.md"; then
+  fail "SKILL.md still recommends ask-print in the user-facing workflow"
+fi
+
+# The downloadable archive is the release artifact, so it must match the source skill folder.
+ARCHIVE="$ROOT/dist/sparring.skill"
+EXTRACTED_DIR="${TMPDIR:-/tmp}/sparring-skill-layout-$$"
+cleanup() { rm -rf "$EXTRACTED_DIR"; }
+trap cleanup EXIT
+
+[ -f "$ARCHIVE" ] || fail "missing distributable archive: dist/sparring.skill"
+mkdir -p "$EXTRACTED_DIR"
+unzip -q "$ARCHIVE" -d "$EXTRACTED_DIR" || fail "dist/sparring.skill could not be unpacked"
+diff -qr "$SKILL_DIR" "$EXTRACTED_DIR/sparring" >/dev/null \
+  || fail "dist/sparring.skill is out of sync with sparring/"
+[ -x "$EXTRACTED_DIR/sparring/bin/sparctl" ] \
+  || fail "dist/sparring.skill did not preserve sparctl executable bit"
 
 echo "SKILL_LAYOUT_OK: sparring skill folder is self-contained"

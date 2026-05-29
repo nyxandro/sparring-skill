@@ -7,7 +7,7 @@ description: Use when the user says "sparring" or asks to run a sparring session
 
 Use this skill when the user wants a `sparring` session with another CLI agent. The skill turns requests like “run sparring with Claude”, “sparring my plan with Codex”, or “discuss this with Claude” into a concrete workflow through the bundled `sparring` harness.
 
-Production rule: prefer print/exec mode first. Use `ask-resume` for multi-turn sparring when provider-native continuity matters; use `ask-session` when portable transcript replay is preferred. Use tmux only as a fallback or when the user explicitly wants a live attachable TUI session.
+Production rule: prefer print/exec mode first. For a fresh sparring session, use `ask-session` with a unique temporary session file. Use `ask-resume` only to continue a provider-native session whose state file was created and kept during the current sparring flow. Use tmux only as a fallback or when the user explicitly wants a live attachable TUI session.
 
 ## Trigger Phrases
 
@@ -79,7 +79,6 @@ If the CLI is missing, report it directly and do not substitute another agent si
 Use the resolved bundled `sparctl` path. In examples below, `$SPARRING_HARNESS` means the executable at `<skill directory>/bin/sparctl`.
 
 ```bash
-$SPARRING_HARNESS ask-print <name> "<prompt>" /tmp/<name>-print.txt
 $SPARRING_HARNESS ask-session <name> /tmp/<name>-sparring.log "<prompt>" /tmp/<name>-turn.txt
 $SPARRING_HARNESS ask-resume <name> /tmp/<name>-native.log "<prompt>" /tmp/<name>-turn.txt
 $SPARRING_HARNESS ask-auto <name> "<prompt>" /tmp/<name>-auto.txt
@@ -87,12 +86,11 @@ $SPARRING_HARNESS ask-auto <name> "<prompt>" /tmp/<name>-auto.txt
 
 Command meanings:
 
-- `ask-print`: one-shot print/exec call, no tmux.
-- `ask-session`: print/exec call with file-backed sparring history; use this for portable multi-turn debate.
-- `ask-resume`: print/exec call with provider-native resume (`claude --resume` / `codex exec resume`) plus a local audit file; use this for continued sparring when the provider should remember its own prior turns.
+- `ask-session`: print/exec call with file-backed sparring history; use this as the default for fresh multi-turn debate.
+- `ask-resume`: print/exec call with provider-native resume (`claude --resume` / `codex exec resume`) plus a local audit file; use this only when intentionally continuing a known provider-native state file from the current sparring flow.
 - `ask-auto`: print/exec first, then tmux fallback if no print provider is configured or the print provider fails.
 
-Run `sparctl` from the project directory that the opponent should inspect. For example, if the current task is in `/home/nyx/projects/domovey`, use that directory as the shell working directory.
+Run `sparctl` from the project directory that the opponent should inspect. Use the target repository root as the shell working directory so the opponent reads the intended files.
 
 Print providers receive prompts through stdin, not argv. This keeps long session prompts away from process listings and avoids shell argument-size limits. Empty successful provider answers are treated as errors by the harness.
 
@@ -102,7 +100,7 @@ Use this loop for planning, architecture discussion, brainstorming, second opini
 
 1. Identify the opponent from the user's wording.
 2. Build a prompt in the user's language asking for an independent view, risks, alternatives and concrete recommendations. Remind the opponent to counter the common model tendency to be agreeable: their role is to test the idea critically, not to please the user or the main agent.
-3. Use `ask-resume` by default for multi-turn debate so Claude/Codex continue their native provider session. Use `ask-session` instead when native resume fails, when you need provider-agnostic transcript replay, or when you do not want provider-side session persistence.
+3. Use `ask-session` by default for fresh multi-turn debate, with a unique temporary session file. Do not use `ask-resume` for a new review or first turn: provider-native resume can continue stale CLI context if the state file already exists. Use `ask-resume` only when explicitly continuing a provider-native session state that this sparring flow created and intentionally kept.
 4. Read the output file and incorporate the opponent's answer into your own reasoning.
 5. If you have doubts, partial disagreement, unanswered questions, or the opponent's answer feels too agreeable or too shallow, do not stop at a single second opinion. Send a follow-up turn that states your objections clearly and asks the opponent to defend, revise, or narrow their position.
 6. Do not debate just for ceremony: continue only when the extra turn can change the conclusion, expose a hidden assumption, or make the recommendation more precise.
@@ -125,23 +123,23 @@ If the main agent's next turn contains doubts or objections to your position, do
 
 ## Print-Mode Examples
 
-Claude native resume:
+Fresh sparring with local transcript replay:
+
+```bash
+$SPARRING_HARNESS ask-session claude /tmp/claude-sparring.log "<prompt>" /tmp/claude-turn.txt
+$SPARRING_HARNESS ask-session codex /tmp/codex-sparring.log "<prompt>" /tmp/codex-turn.txt
+```
+
+Explicit continuation of a known provider-native Claude session:
 
 ```bash
 $SPARRING_HARNESS ask-resume claude /tmp/claude-native.log "<prompt>" /tmp/claude-turn.txt
 ```
 
-Codex native resume:
+Explicit continuation of a known provider-native Codex session:
 
 ```bash
 $SPARRING_HARNESS ask-resume codex /tmp/codex-native.log "<prompt>" /tmp/codex-turn.txt
-```
-
-Portable transcript replay:
-
-```bash
-$SPARRING_HARNESS ask-session claude /tmp/claude-sparring.log "<prompt>" /tmp/claude-turn.txt
-$SPARRING_HARNESS ask-session codex /tmp/codex-sparring.log "<prompt>" /tmp/codex-turn.txt
 ```
 
 Auto fallback:
@@ -195,7 +193,7 @@ $SPARRING_HARNESS stop <session-name>
 
 Report briefly:
 
-- Which opponent was used and which backend was launched (`ask-resume`, `ask-session`, `ask-print`, `ask-auto`, or tmux).
+- Which opponent was used and which backend was launched (`ask-session`, `ask-resume`, `ask-auto`, or tmux).
 - Output path if a long answer was captured.
 - State/session file path only if it remains useful for continued sparring.
 - Whether fallback was used.

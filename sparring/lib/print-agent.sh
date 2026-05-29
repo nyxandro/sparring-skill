@@ -171,8 +171,8 @@ print_agent_run() {
       fi
       ;;
     codex)
-      if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" exec --sandbox read-only --skip-git-repo-check \
-        --color never -C "$PWD" --output-last-message "$tmp" - >/dev/null 2> "$err"; then
+      if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only -C "$PWD" \
+        exec --skip-git-repo-check --color never --output-last-message "$tmp" - >/dev/null 2> "$err"; then
         :
       else
         status=$?
@@ -198,17 +198,16 @@ print_agent_session_run() {
   _print_require_parent "$session" "SPAR_PRINT_SESSION_PARENT_MISSING" || return 1
   _print_require_parent "$out" "SPAR_PRINT_SESSION_OUTPUT_PARENT_MISSING" || return 1
 
-  # The prompt is self-contained: previous sparring turns plus the new request and response rules.
+  # Session mode only wraps structural context; the caller owns language-specific instructions.
   built_prompt="$({
-    printf 'Ты участвуешь в sparring-сессии как независимый инженер.\n'
-    printf 'Учитывай историю ниже, но отвечай только на новый запрос. Не редактируй файлы без явной просьбы.\n\n'
-    printf 'История sparring-сессии:\n'
+    printf '<previous_sparring_turns>\n'
     if [ -f "$session" ]; then
       tail -n "$SPAR_PRINT_CONTEXT_LINES" "$session"
     else
-      printf '(истории пока нет)\n'
+      printf '(none)\n'
     fi
-    printf '\nНовый запрос пользователя:\n%s\n' "$prompt"
+    printf '</previous_sparring_turns>\n\n'
+    printf '<current_request>\n%s\n</current_request>\n' "$prompt"
   })"
 
   print_agent_run "$name" "$built_prompt" "$out" || return 1
@@ -271,8 +270,8 @@ print_agent_resume_run() {
       ;;
     codex)
       if [ -z "$session_id" ]; then
-        if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only \
-          -C "$PWD" exec --skip-git-repo-check --color never --json --output-last-message "$tmp" - > "$events" 2> "$err"; then
+        if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only -C "$PWD" \
+          exec --skip-git-repo-check --color never --json --output-last-message "$tmp" - > "$events" 2> "$err"; then
           :
         else
           status=$?
@@ -287,8 +286,8 @@ print_agent_resume_run() {
           return 1
         fi
       else
-        if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only \
-          -C "$PWD" exec resume --skip-git-repo-check --json --output-last-message "$tmp" "$session_id" - > "$events" 2> "$err"; then
+        if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only -C "$PWD" \
+          exec --skip-git-repo-check --color never --json --output-last-message "$tmp" resume "$session_id" - > "$events" 2> "$err"; then
           :
         else
           status=$?

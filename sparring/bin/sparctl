@@ -264,12 +264,14 @@ case "$cmd" in
       echo "SPARCTL_ASK_WATCH_PARENT_MISSING: parent directory does not exist: $parent" >&2
       exit 1
     fi
+    initial="$(mktemp "${TMPDIR:-/tmp}/sparctl-watch-initial.XXXXXX")"
     previous="$(mktemp "${TMPDIR:-/tmp}/sparctl-watch-prev.XXXXXX")"
     current="$(mktemp "${TMPDIR:-/tmp}/sparctl-watch-cur.XXXXXX")"
     chunk="$(mktemp "${TMPDIR:-/tmp}/sparctl-watch-chunk.XXXXXX")"
-    cleanup_watch_files() { rm -f "$previous" "$current" "$chunk"; }
+    cleanup_watch_files() { rm -f "$initial" "$previous" "$current" "$chunk"; }
     trap cleanup_watch_files EXIT
-    agent_transcript "$name" > "$previous"
+    agent_transcript "$name" > "$initial"
+    cp "$initial" "$previous"
     : > "$out"
     agent_send "$name" "$text"
     prev_hash=""
@@ -312,6 +314,21 @@ case "$cmd" in
       fi
       sleep "$POLL_INTERVAL"
     done
+    # The live chunks above are best-effort; rewrite with the final stable delta to avoid races.
+    agent_transcript "$name" > "$current"
+    awk '
+      NR == FNR { initial[++initial_count] = $0; next }
+      { current[++current_count] = $0 }
+      END {
+        first_delta = 1
+        while (first_delta <= initial_count && first_delta <= current_count && initial[first_delta] == current[first_delta]) {
+          first_delta++
+        }
+        for (line_number = first_delta; line_number <= current_count; line_number++) {
+          print current[line_number]
+        }
+      }
+    ' "$initial" "$current" > "$out"
     lines="$(awk 'END { print NR }' "$out")"
     bytes="$(wc -c < "$out" | tr -d '[:space:]')"
     printf 'wrote watched transcript: %s (%s lines, %s bytes)\n' "$out" "$lines" "$bytes"
