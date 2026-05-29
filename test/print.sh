@@ -13,6 +13,8 @@ SKILL_DIR="$ROOT/sparring"
 SPARCTL="$SKILL_DIR/bin/sparctl"
 # shellcheck source=../sparring/lib/tmux-agent.sh
 source "$SKILL_DIR/lib/tmux-agent.sh"
+# shellcheck source=../sparring/lib/print-agent.sh
+source "$SKILL_DIR/lib/print-agent.sh"
 
 AGENT="auto-print-smoke"
 WORK_DIR="${TMPDIR:-/tmp}/sparctl-print-${AGENT}"
@@ -41,6 +43,10 @@ cleanup() {
 trap cleanup EXIT
 
 fail() { echo "PRINT_SMOKE_FAIL: $1" >&2; exit 1; }
+
+# Sparring answers are often long critical reviews, so the default cap should not kill a
+# healthy provider before it can finish. Fast answers still return immediately before the cap.
+[ "$SPAR_PRINT_TIMEOUT" = 500 ] || fail "default SPAR_PRINT_TIMEOUT should be 500 seconds"
 
 # Build deterministic provider shims so tests never spend API tokens or depend on network access.
 mkdir -p "$SHIM_DIR"

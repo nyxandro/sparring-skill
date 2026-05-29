@@ -12,7 +12,7 @@
 #     print_agent_resume_run   run provider-native resume while keeping a local audit transcript
 
 # --- Configuration constants --------------------------------------------------------
-SPAR_PRINT_TIMEOUT="${SPAR_PRINT_TIMEOUT:-300}"             # seconds per print/exec call
+SPAR_PRINT_TIMEOUT="${SPAR_PRINT_TIMEOUT:-500}"             # seconds per print/exec call
 SPAR_PRINT_CONTEXT_LINES="${SPAR_PRINT_CONTEXT_LINES:-400}" # bounded history for next prompt
 
 # --- Internal helpers ---------------------------------------------------------------
