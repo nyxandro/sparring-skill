@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# package-skill — rebuild the distributable Sparring skill archive.
+#
+# Table of contents (key constructs):
+#   Constants:
+#     ROOT        repository root resolved from this script location
+#     SOURCE      plaintext skill source committed for reviewable diffs
+#     OUTPUT      generated skill archive consumed by OpenCode and Claude Code
+#   Flow:
+#     validate required files and tools, then create dist/sparring.skill deterministically
+
+set -euo pipefail
+
+# Resolve paths relative to this script so packaging works from any current directory.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$HERE")"
+SOURCE="$ROOT/sparring/SKILL.md"
+OUTPUT="$ROOT/dist/sparring.skill"
+
+# Fail fast when the committed source or runtime packer is missing.
+if [ ! -f "$SOURCE" ]; then
+  echo "SPAR_PACKAGE_SOURCE_MISSING: expected skill source at $SOURCE" >&2
+  exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "SPAR_PACKAGE_PYTHON_MISSING: python3 is required to create the skill zip archive" >&2
+  exit 1
+fi
+
+# Python's stdlib zipfile avoids a runtime dependency on the optional `zip` binary.
+python3 - "$SOURCE" "$OUTPUT" <<'PY'
+from __future__ import annotations
+
+import os
+import sys
+import zipfile
+
+SOURCE_PATH = sys.argv[1]
+OUTPUT_PATH = sys.argv[2]
+ARCHIVE_NAME = "sparring/SKILL.md"
+FIXED_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
+
+# Write to a sibling temp file first so failed packaging never corrupts the artifact.
+temp_path = f"{OUTPUT_PATH}.tmp"
+with open(SOURCE_PATH, "rb") as source_file:
+    content = source_file.read()
+
+info = zipfile.ZipInfo(ARCHIVE_NAME, FIXED_TIMESTAMP)
+info.compress_type = zipfile.ZIP_DEFLATED
+info.external_attr = 0o644 << 16
+
+os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
+with zipfile.ZipFile(temp_path, "w") as archive:
+    archive.writestr(info, content)
+os.replace(temp_path, OUTPUT_PATH)
+PY
+
+printf 'rebuilt skill archive: %s\n' "$OUTPUT"

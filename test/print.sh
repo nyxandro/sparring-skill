@@ -25,6 +25,8 @@ CODEX_RESUME_OUT="$WORK_DIR/codex-resume.txt"
 CODEX_RESUME_STATE="$WORK_DIR/codex-resume.log"
 AUTO_OUT="$WORK_DIR/auto.txt"
 EMPTY_OUT="$WORK_DIR/empty.txt"
+PROVIDER_FAIL_OUT="$WORK_DIR/provider-fail.txt"
+PROVIDER_FAIL_ERR="$WORK_DIR/provider-fail.err"
 ORIGINAL_PATH="$PATH"
 
 # Keep temp files and tmux sessions isolated even when an assertion fails.
@@ -57,6 +59,10 @@ prompt="$(cat)"
 [ -n "$prompt" ] || { echo "claude shim expected prompt on stdin" >&2; exit 1; }
 if [ "$prompt" = "empty smoke" ]; then
   exit 0
+fi
+if [ "$prompt" = "provider fail smoke" ]; then
+  echo "claude shim simulated provider failure" >&2
+  exit 42
 fi
 if printf '%s' "$prompt" | grep -q "native claude first"; then
   printf '%s\n' "$*" | grep -q -- "--session-id" || { echo "claude shim expected --session-id for first native resume turn" >&2; exit 1; }
@@ -139,6 +145,16 @@ if $ROOT/bin/sparctl ask-print claude "empty smoke" "$EMPTY_OUT" >/dev/null 2>&1
   fail "empty provider answer was accepted as a successful response"
 fi
 [ ! -e "$EMPTY_OUT" ] || fail "empty provider answer left an output file behind"
+
+# Provider failures should preserve enough stderr context to diagnose real CLI breakage.
+if $ROOT/bin/sparctl ask-print claude "provider fail smoke" "$PROVIDER_FAIL_OUT" > /dev/null 2> "$PROVIDER_FAIL_ERR"; then
+  fail "provider failure was accepted as a successful response"
+fi
+grep -q "exit status 42" "$PROVIDER_FAIL_ERR" \
+  || fail "provider failure did not report the provider exit status"
+grep -q "claude shim simulated provider failure" "$PROVIDER_FAIL_ERR" \
+  || fail "provider failure did not include provider stderr"
+[ ! -e "$PROVIDER_FAIL_OUT" ] || fail "provider failure left an output file behind"
 
 # Session mode should carry previous turns forward by constructing a consolidated prompt.
 $ROOT/bin/sparctl ask-session claude "$SESSION_FILE" "first turn" "$SESSION_OUT" >/dev/null

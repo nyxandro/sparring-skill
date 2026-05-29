@@ -6,6 +6,7 @@
 #     SPAR_PRINT_TIMEOUT       hard cap for non-interactive provider calls
 #     SPAR_PRINT_CONTEXT_LINES retained session history lines sent on each turn
 #   Functions:
+#     _print_report_provider_failure include provider stderr in harness failure diagnostics
 #     print_agent_run          run claude -p / codex exec and write the answer to a file
 #     print_agent_session_run  build a rolling-history prompt, run the provider, append transcript
 #     print_agent_resume_run   run provider-native resume while keeping a local audit transcript
@@ -43,6 +44,24 @@ _print_commit_answer() {
     return 1
   fi
   mv "$tmp" "$out"
+}
+
+# Preserve provider stderr on failures; without it, transient CLI/auth/flag errors become opaque.
+_print_report_provider_failure() {
+  local code="$1" detail="$2" status="$3" tmp="$4" err="$5"
+  rm -f "$tmp"
+  echo "$code: $detail failed with exit status $status. Inspect provider stderr below and rerun after fixing the CLI/auth/config issue." >&2
+  if [ -s "$err" ]; then
+    echo "SPAR_PRINT_PROVIDER_STDERR_BEGIN" >&2
+    while IFS= read -r line; do
+      printf '%s\n' "$line" >&2
+    done < "$err"
+    echo "SPAR_PRINT_PROVIDER_STDERR_END" >&2
+  else
+    echo "SPAR_PRINT_PROVIDER_STDERR_EMPTY: provider produced no stderr" >&2
+  fi
+  rm -f "$err"
+  return 1
 }
 
 # GNU timeout keeps wedged providers from blocking the harness forever.
@@ -129,7 +148,7 @@ _print_append_resume_audit() {
 # Prefer deterministic stdout-style providers over TUI scraping. The answer is written atomically
 # only after the provider exits successfully, so failed calls never leave misleading output behind.
 print_agent_run() {
-  local name="$1" prompt="$2" out="$3" exe tmp
+  local name="$1" prompt="$2" out="$3" exe tmp err status
   if [ -z "$name" ] || [ -z "$prompt" ] || [ -z "$out" ]; then
     echo "SPAR_PRINT_BAD_ARGS: print_agent_run needs <name> <prompt> <output-file>" >&2
     return 1
@@ -138,26 +157,32 @@ print_agent_run() {
   _print_require_timeout || return 1
   exe="$(_print_command_for_name "$name")" || return 1
   tmp="$(_print_make_tmp_for_output "$out")"
+  err="$(_print_make_tmp_for_output "$out.stderr")"
 
   # Providers are intentionally explicit and receive prompts through stdin to avoid ARG_MAX/ps leaks.
   case "$name" in
     claude)
-      if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" -p --permission-mode plan --output-format text > "$tmp"; then
-        rm -f "$tmp"
-        echo "SPAR_PRINT_PROVIDER_FAILED: claude -p failed for agent '$name'" >&2
+      if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" -p --permission-mode plan --output-format text > "$tmp" 2> "$err"; then
+        :
+      else
+        status=$?
+        _print_report_provider_failure "SPAR_PRINT_PROVIDER_FAILED" "claude -p for agent '$name'" "$status" "$tmp" "$err"
         return 1
       fi
       ;;
     codex)
-      if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" exec --sandbox read-only --skip-git-repo-check \
-        --color never -C "$PWD" --output-last-message "$tmp" - >/dev/null; then
-        rm -f "$tmp"
-        echo "SPAR_PRINT_PROVIDER_FAILED: codex exec failed for agent '$name'" >&2
+      if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" exec --sandbox read-only --skip-git-repo-check \
+        --color never -C "$PWD" --output-last-message "$tmp" - >/dev/null 2> "$err"; then
+        :
+      else
+        status=$?
+        _print_report_provider_failure "SPAR_PRINT_PROVIDER_FAILED" "codex exec for agent '$name'" "$status" "$tmp" "$err"
         return 1
       fi
       ;;
   esac
 
+  rm -f "$err"
   _print_commit_answer "$tmp" "$out" "$name"
 }
 
@@ -199,7 +224,7 @@ print_agent_session_run() {
 # Use the provider's own persisted conversation instead of replaying transcript text. The state file
 # stores only the provider session id plus an audit transcript for humans and future debugging.
 print_agent_resume_run() {
-  local name="$1" state="$2" prompt="$3" out="$4" exe tmp events session_id is_first_turn
+  local name="$1" state="$2" prompt="$3" out="$4" exe tmp err events session_id is_first_turn status
   if [ -z "$name" ] || [ -z "$state" ] || [ -z "$prompt" ] || [ -z "$out" ]; then
     echo "SPAR_PRINT_RESUME_BAD_ARGS: print_agent_resume_run needs <name> <state-file> <prompt> <output-file>" >&2
     return 1
@@ -210,6 +235,7 @@ print_agent_resume_run() {
   _print_resume_validate_state "$name" "$state" || return 1
   exe="$(_print_command_for_name "$name")" || return 1
   tmp="$(_print_make_tmp_for_output "$out")"
+  err="$(_print_make_tmp_for_output "$out.stderr")"
   events="$(_print_make_tmp_for_output "$out.events")"
   session_id="$(_print_resume_state_value "$state" session_id)"
   is_first_turn=0
@@ -218,50 +244,63 @@ print_agent_resume_run() {
   case "$name" in
     claude)
       if [ -z "$session_id" ]; then
-        session_id="$(_print_generate_uuid)" || { rm -f "$tmp" "$events"; return 1; }
+        session_id="$(_print_generate_uuid)" || { rm -f "$tmp" "$err" "$events"; return 1; }
         is_first_turn=1
       fi
       if [ "$is_first_turn" = 1 ]; then
-        if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" -p --permission-mode plan \
-          --output-format text --session-id "$session_id" > "$tmp"; then
-          rm -f "$tmp" "$events"
-          echo "SPAR_PRINT_RESUME_PROVIDER_FAILED: claude first native turn failed for agent '$name'" >&2
+        if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" -p --permission-mode plan \
+          --output-format text --session-id "$session_id" > "$tmp" 2> "$err"; then
+          :
+        else
+          status=$?
+          rm -f "$events"
+          _print_report_provider_failure "SPAR_PRINT_RESUME_PROVIDER_FAILED" "claude first native turn for agent '$name'" "$status" "$tmp" "$err"
           return 1
         fi
       else
-        if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" -p --permission-mode plan \
-          --output-format text --resume "$session_id" > "$tmp"; then
-          rm -f "$tmp" "$events"
-          echo "SPAR_PRINT_RESUME_PROVIDER_FAILED: claude native resume failed for agent '$name'" >&2
+        if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" -p --permission-mode plan \
+          --output-format text --resume "$session_id" > "$tmp" 2> "$err"; then
+          :
+        else
+          status=$?
+          rm -f "$events"
+          _print_report_provider_failure "SPAR_PRINT_RESUME_PROVIDER_FAILED" "claude native resume for agent '$name'" "$status" "$tmp" "$err"
           return 1
         fi
       fi
       ;;
     codex)
       if [ -z "$session_id" ]; then
-        if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only \
-          -C "$PWD" exec --skip-git-repo-check --color never --json --output-last-message "$tmp" - > "$events"; then
-          rm -f "$tmp" "$events"
-          echo "SPAR_PRINT_RESUME_PROVIDER_FAILED: codex first native turn failed for agent '$name'" >&2
+        if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only \
+          -C "$PWD" exec --skip-git-repo-check --color never --json --output-last-message "$tmp" - > "$events" 2> "$err"; then
+          :
+        else
+          status=$?
+          rm -f "$events"
+          _print_report_provider_failure "SPAR_PRINT_RESUME_PROVIDER_FAILED" "codex first native turn for agent '$name'" "$status" "$tmp" "$err"
           return 1
         fi
         session_id="$(_print_extract_codex_session_id "$events")"
         if [ -z "$session_id" ]; then
-          rm -f "$tmp" "$events"
+          rm -f "$tmp" "$err" "$events"
           echo "SPAR_PRINT_RESUME_SESSION_ID_MISSING: codex --json did not emit a session/thread id" >&2
           return 1
         fi
       else
-        if ! printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only \
-          -C "$PWD" exec resume --skip-git-repo-check --json --output-last-message "$tmp" "$session_id" - > "$events"; then
-          rm -f "$tmp" "$events"
-          echo "SPAR_PRINT_RESUME_PROVIDER_FAILED: codex native resume failed for agent '$name'" >&2
+        if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only \
+          -C "$PWD" exec resume --skip-git-repo-check --json --output-last-message "$tmp" "$session_id" - > "$events" 2> "$err"; then
+          :
+        else
+          status=$?
+          rm -f "$events"
+          _print_report_provider_failure "SPAR_PRINT_RESUME_PROVIDER_FAILED" "codex native resume for agent '$name'" "$status" "$tmp" "$err"
           return 1
         fi
       fi
       ;;
   esac
 
+  rm -f "$err"
   _print_commit_answer "$tmp" "$out" "$name" || { rm -f "$events"; return 1; }
   _print_append_resume_audit "$name" "$state" "$session_id" "$prompt" "$out"
   rm -f "$events"

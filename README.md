@@ -104,12 +104,20 @@ Run the full regression suite:
 bash test/run-all.sh
 ```
 
+Rebuild the packaged skill from the committed plaintext source:
+
+```bash
+bin/package-skill
+```
+
 ## Project Layout
 
 ```text
+bin/package-skill  rebuild dist/sparring.skill from sparring/SKILL.md
 bin/sparctl        print-first CLI plus tmux fallback controls
 lib/print-agent.sh claude -p / codex exec providers and session history
 lib/tmux-agent.sh  live tmux fallback primitives
+sparring/SKILL.md  plaintext skill source used for reviewable prompt diffs
 test/              smoke and regression tests
 dist/sparring.skill packaged skill
 ```
