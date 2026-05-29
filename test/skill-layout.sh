@@ -38,14 +38,13 @@ fi
 if grep -q 'Use `ask-resume` by default' "$SKILL_DIR/SKILL.md"; then
   fail "SKILL.md still makes ask-resume the default for fresh sparring"
 fi
-grep -q 'Use `ask-session` by default for fresh multi-turn debate' "$SKILL_DIR/SKILL.md" \
+grep -q 'Use `ask-session` by default for a fresh sparring request' "$SKILL_DIR/SKILL.md" \
   || fail "SKILL.md does not define ask-session as the fresh multi-turn default"
-grep -q 'Do not use `ask-resume` for a new review or first turn' "$SKILL_DIR/SKILL.md" \
+grep -q 'Do not use `ask-resume` for a new sparring request or first turn' "$SKILL_DIR/SKILL.md" \
   || fail "SKILL.md does not warn against ask-resume on a first turn"
 if grep -q '`ask-print`' "$SKILL_DIR/SKILL.md"; then
   fail "SKILL.md still recommends ask-print in the user-facing workflow"
 fi
-
 # The downloadable archive is the release artifact, so it must match the source skill folder.
 ARCHIVE="$ROOT/dist/sparring.skill"
 EXTRACTED_DIR="${TMPDIR:-/tmp}/sparring-skill-layout-$$"

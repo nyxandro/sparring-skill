@@ -32,7 +32,7 @@ reads them back, cleans them up, and summarizes what changed after the sparring.
 
 ## How It Works
 
-The production path is print-first:
+The production path is non-interactive CLI mode:
 
 - Claude is called through `claude -p`.
 - Codex is called through `codex exec`.
@@ -41,7 +41,7 @@ The production path is print-first:
   or `codex exec resume`, while keeping a local audit transcript.
 - Temporary output files are deleted after they are read unless you explicitly ask to keep them.
 
-There is also a tmux fallback for live interactive agents. Use it only when print mode is not
+There is also a tmux mode for live interactive agents. Use it only when non-interactive CLI mode is not
 available or when you specifically want to watch the other agent in a terminal session.
 
 ## Install
@@ -70,13 +70,13 @@ valid. Restart OpenCode or Claude Code after updating the skill.
 ## Requirements
 
 - Linux with Bash 4+.
-- GNU `timeout` for print mode.
+- GNU `timeout` for non-interactive CLI mode.
 - `claude` and/or `codex` installed and authenticated.
 - `tmux` only for fallback/live mode.
 
 ## Known Limits
 
-- Print mode is the reliable production path; tmux mode is a fallback for interactive TUIs.
+- Non-interactive CLI mode is the reliable production path; tmux mode is for interactive TUIs.
 - Tmux input is submitted as one line. Multi-line prompts are flattened before sending so they do
   not become multiple accidental turns.
 - Tmux completion is detected by screen stability, not by a provider event. Very long pauses inside
@@ -97,10 +97,7 @@ sparring/bin/sparctl ask-resume claude /tmp/claude-native.log "Follow-up" /tmp/t
 sparring/bin/sparctl ask-resume codex /tmp/codex-native.log "First question" /tmp/codex-turn.txt
 sparring/bin/sparctl ask-resume codex /tmp/codex-native.log "Follow-up" /tmp/codex-turn.txt
 
-# Prefer print mode, fall back to tmux if needed.
-sparring/bin/sparctl ask-auto claude "Review this implementation" /tmp/claude-auto.txt
-
-# Live tmux session, only when you want to watch or when print mode is unavailable.
+# Live tmux session, only when you want to watch or when non-interactive CLI mode is unavailable.
 sparring/bin/sparctl start claude
 tmux attach -t spar-claude
 sparring/bin/sparctl stop claude
@@ -116,7 +113,7 @@ bash test/run-all.sh
 
 ```text
 sparring/SKILL.md           skill instructions
-sparring/bin/sparctl        print-first CLI plus tmux fallback controls
+sparring/bin/sparctl        non-interactive CLI plus tmux controls
 sparring/lib/print-agent.sh claude -p / codex exec providers and session history
 sparring/lib/tmux-agent.sh  live tmux fallback primitives
 dist/sparring.skill         downloadable self-contained skill archive
@@ -125,8 +122,8 @@ test/                       smoke and regression tests
 
 ## Notes
 
-Print mode is preferred because it captures clean stdout and avoids terminal scraping. tmux mode is
-kept for agents that only expose an interactive TUI, but it is inherently more heuristic.
+Non-interactive CLI mode is preferred because it captures clean stdout and avoids terminal scraping.
+Tmux mode is kept for agents that only expose an interactive TUI, but it is inherently more heuristic.
 
 ## License
 
