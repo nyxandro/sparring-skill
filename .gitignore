@@ -1,0 +1,13 @@
+# Local editor and OS metadata.
+.DS_Store
+.idea/
+.vscode/
+
+# Runtime logs and temporary artifacts.
+*.log
+*.tmp
+*.swp
+
+# Shell test and coverage leftovers.
+coverage/
+.nyc_output/

@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# spar — dispatcher demo for Sparring.
+#
+# Theme: two rival agents ("competitors") are each given the same task in their own live
+# tmux session. The dispatcher then makes them spar: it feeds each agent the rival's answer
+# and asks for a critique. Finally it prints both plans and both critiques.
+#
+# This demonstrates the whole loop the user asked for, with NO headless mode:
+#   1. launch full interactive agents inside the terminal (tmux panes),
+#   2. "type" a task into each and submit it,
+#   3. wait for each to finish (screen-stabilisation idle detection),
+#   4. collect each answer and take it into the dispatcher's own work,
+#   5. route answers between agents to run review through them.
+#
+# Run:        bin/spar ["your task here"]
+# Watch live: tmux attach -t spar-alice   (or spar-bob)
+# Real agents: SPAR_AGENT_CMD="claude" bin/spar "..."   (instead of the mock)
+
+set -euo pipefail
+
+# --- Locate ourselves and load the tmux harness ------------------------------------
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$HERE")"
+# shellcheck source=../lib/tmux-agent.sh
+source "$ROOT/lib/tmux-agent.sh"
+
+# --- Config -------------------------------------------------------------------------
+# The command each agent runs. Defaults to the mock; override with a real CLI agent.
+AGENT_CMD="${SPAR_AGENT_CMD:-$ROOT/bin/mock-agent.sh}"
+# The task both competitors get. Taken from the first argument or a sensible demo default.
+TASK="${1:-Draft a 3-step plan to add rate limiting to a public API.}"
+# The two competitors. Personas are passed as the last command arg (the mock reads it).
+AGENTS=(alice bob)
+# Settle time after spawning so banners finish rendering before we send the first task.
+SPAWN_SETTLE_SECONDS=1
+
+# --- Always clean up live sessions, even on error or Ctrl-C -------------------------
+cleanup() {
+  for a in "${AGENTS[@]}"; do
+    agent_kill "$a"
+  done
+}
+trap cleanup EXIT
+
+# Flatten multi-line text to a single line. Needed because agent_send delivers one line,
+# and a readline-style input box submits at the first newline.
+flatten() {
+  tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+# Pretty section header.
+section() {
+  printf '\n\033[1m=== %s ===\033[0m\n' "$1"
+}
+
+# --- 1. Spawn the competitors -------------------------------------------------------
+section "Spawning competitors"
+for a in "${AGENTS[@]}"; do
+  # Pass the persona name to the agent command (mock-agent reads it; real claude ignores it).
+  agent_spawn "$a" "$AGENT_CMD $a"
+  printf 'spawned %-6s -> tmux session %s-%s\n' "$a" "$SPAR_SESSION_PREFIX" "$a"
+done
+sleep "$SPAWN_SETTLE_SECONDS"
+
+# --- 2. Round 1: same task to both, thinking concurrently ---------------------------
+section "Round 1 — both agents plan (concurrently)"
+declare -A base
+declare -A plan
+# Capture baselines and fire the task at both BEFORE waiting, so they work in parallel.
+for a in "${AGENTS[@]}"; do
+  base[$a]="$(agent_linecount "$a")"
+  agent_send "$a" "$TASK"
+done
+# Now block on each in turn; total wall-clock is the slower agent, not the sum.
+for a in "${AGENTS[@]}"; do
+  agent_wait_idle "$a"
+  plan[$a]="$(agent_collect "$a" "${base[$a]}" | strip_echo "$TASK")"
+done
+
+for a in "${AGENTS[@]}"; do
+  printf '\n\033[36m--- %s plan ---\033[0m\n%s\n' "$a" "${plan[$a]}"
+done
+
+# --- 3. Round 2: cross-review (review run THROUGH the agents) ------------------------
+section "Round 2 — each critiques the rival's plan"
+# Map each agent to its opponent.
+declare -A rival=( [alice]=bob [bob]=alice )
+declare -A critique
+declare -A rbase
+declare -A rprompt
+for a in "${AGENTS[@]}"; do
+  opp="${rival[$a]}"
+  # Flatten the rival's plan into one line and wrap it as a critique request.
+  rival_oneline="$(printf '%s' "${plan[$opp]}" | flatten)"
+  rprompt[$a]="Critique this rival plan and give your verdict: ${rival_oneline}"
+  rbase[$a]="$(agent_linecount "$a")"
+  agent_send "$a" "${rprompt[$a]}"
+done
+for a in "${AGENTS[@]}"; do
+  agent_wait_idle "$a"
+  critique[$a]="$(agent_collect "$a" "${rbase[$a]}" | strip_echo "${rprompt[$a]}")"
+done
+
+for a in "${AGENTS[@]}"; do
+  printf '\n\033[33m--- %s critiques %s ---\033[0m\n%s\n' "$a" "${rival[$a]}" "${critique[$a]}"
+done
+
+# --- 4. Done ------------------------------------------------------------------------
+section "Sparring complete"
+printf 'Both competitors planned and reviewed each other. Sessions will now be torn down.\n'

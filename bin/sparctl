@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+# sparctl — control CLI for print-first and tmux-backed sparring agents.
+#
+# Table of contents (key commands):
+#   ask-print   ask a non-interactive provider (Claude -p / Codex exec)
+#   ask-session ask a non-interactive provider with file-backed sparring history
+#   ask-auto    prefer ask-print and fall back to tmux when print is unavailable
+#   start       create a persistent tmux session for an interactive agent
+#   send        type one prompt into an existing session without waiting
+#   ask         send one prompt, wait for the screen to settle and print the cleaned delta
+#   ask-delta   send one prompt, wait and save only the new transcript rows
+#   ask-watch   send one prompt and spool transcript changes while the agent is working
+#   ask-once    start a fresh session with the prompt passed as an initial CLI argument
+#   wait        block until the agent screen stops changing
+#   screen      print the currently visible pane
+#   transcript  print or save the retained scrollback for long answers
+#   attach      attach the current terminal to the tmux session
+#   sessions    list sessions managed by the configured SPAR_SESSION_PREFIX
+#   stop        kill one persistent agent session
+
+set -euo pipefail
+
+# Resolve paths relative to this script so it works from any current directory.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$HERE")"
+# shellcheck source=../lib/tmux-agent.sh
+source "$ROOT/lib/tmux-agent.sh"
+# shellcheck source=../lib/print-agent.sh
+source "$ROOT/lib/print-agent.sh"
+
+DEFAULT_AGENT_NAME="${SPAR_DEFAULT_AGENT:-claude}"
+DEFAULT_AGENT_CMD="${SPAR_AGENT_CMD:-claude}"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  bin/sparctl ask-print <name> <text> <output-file>
+  bin/sparctl ask-session <name> <session-file> <text> <output-file>
+  bin/sparctl ask-auto <name> <text> <output-file>
+  bin/sparctl start [--replace] [name] [agent command]
+  bin/sparctl send <name> <text>
+  bin/sparctl ask <name> <text>
+  bin/sparctl ask-delta <name> <text> <output-file>
+  bin/sparctl ask-watch <name> <text> <output-file>
+  bin/sparctl ask-once <name> <agent command> <text> <output-file>
+  bin/sparctl wait <name>
+  bin/sparctl screen <name>
+  bin/sparctl transcript <name> [output-file]
+  bin/sparctl attach <name>
+  bin/sparctl sessions
+  bin/sparctl stop <name>
+
+Examples:
+  bin/sparctl ask-print claude "Ответь коротко: ping" /tmp/claude-print.txt
+  bin/sparctl ask-print codex "Покритикуй план" /tmp/codex-exec.txt
+  bin/sparctl ask-session claude /tmp/sparring-session.log "Продолжим спор" /tmp/claude-turn.txt
+  bin/sparctl ask-auto claude "Дай независимый review" /tmp/claude-auto.txt
+  bin/sparctl start claude
+  bin/sparctl start --replace claude
+  bin/sparctl start claude --replace
+  bin/sparctl start codex
+  bin/sparctl send claude "Ответь коротко: ping"
+  bin/sparctl ask-delta claude "Дай подробный план" /tmp/claude-delta.txt
+  bin/sparctl ask-watch claude "Дай очень длинный анализ" /tmp/claude-watch.txt
+  bin/sparctl ask-once codex-smtp codex "Покритикуй план SMTP" /tmp/codex-smtp.txt
+  bin/sparctl transcript claude /tmp/claude-transcript.txt
+  tmux attach -t spar-claude
+USAGE
+}
+
+default_command_for_name() {
+  local name="$1"
+  # Known opponent names resolve in the caller shell, avoiding stale tmux PATH lookups later.
+  case "$name" in
+    claude|codex)
+      if ! command -v "$name" >/dev/null 2>&1; then
+        echo "SPARCTL_AGENT_COMMAND_MISSING: command not found for known agent: $name" >&2
+        return 1
+      fi
+      command -v "$name"
+      ;;
+    *) printf '%s' "$DEFAULT_AGENT_CMD" ;;
+  esac
+}
+
+shell_quote() {
+  printf '%q' "$1"
+}
+
+require_arg() {
+  local value="$1" message="$2"
+  if [ -z "$value" ]; then
+    echo "$message" >&2
+    usage >&2
+    exit 1
+  fi
+}
+
+cmd="${1:-}"
+if [ -z "$cmd" ] || [ "$cmd" = "help" ] || [ "$cmd" = "--help" ] || [ "$cmd" = "-h" ]; then
+  usage
+  exit 0
+fi
+shift
+
+case "$cmd" in
+  ask-print)
+    # Primary path: non-interactive stdout providers are more reliable than scraping a TUI.
+    name="${1:-}"; text="${2:-}"; out="${3:-}"
+    require_arg "$name" "SPARCTL_ASK_PRINT_BAD_ARGS: ask-print needs <name> <text> <output-file>"
+    require_arg "$text" "SPARCTL_ASK_PRINT_BAD_ARGS: ask-print needs <name> <text> <output-file>"
+    require_arg "$out" "SPARCTL_ASK_PRINT_BAD_ARGS: ask-print needs <name> <text> <output-file>"
+    print_agent_run "$name" "$text" "$out"
+    lines="$(awk 'END { print NR }' "$out")"
+    bytes="$(wc -c < "$out" | tr -d '[:space:]')"
+    printf 'wrote print answer: %s (%s lines, %s bytes)\n' "$out" "$lines" "$bytes"
+    ;;
+
+  ask-session)
+    # Stateful print mode keeps a bounded local transcript and sends it as context each turn.
+    name="${1:-}"; session="${2:-}"; text="${3:-}"; out="${4:-}"
+    require_arg "$name" "SPARCTL_ASK_SESSION_BAD_ARGS: ask-session needs <name> <session-file> <text> <output-file>"
+    require_arg "$session" "SPARCTL_ASK_SESSION_BAD_ARGS: ask-session needs <name> <session-file> <text> <output-file>"
+    require_arg "$text" "SPARCTL_ASK_SESSION_BAD_ARGS: ask-session needs <name> <session-file> <text> <output-file>"
+    require_arg "$out" "SPARCTL_ASK_SESSION_BAD_ARGS: ask-session needs <name> <session-file> <text> <output-file>"
+    print_agent_session_run "$name" "$session" "$text" "$out"
+    lines="$(awk 'END { print NR }' "$out")"
+    bytes="$(wc -c < "$out" | tr -d '[:space:]')"
+    printf 'wrote session answer: %s (%s lines, %s bytes); session: %s\n' "$out" "$lines" "$bytes" "$session"
+    ;;
+
+  ask-auto)
+    # Auto mode gives production callers the stable print path first, then a live tmux fallback.
+    name="${1:-}"; text="${2:-}"; out="${3:-}"
+    require_arg "$name" "SPARCTL_ASK_AUTO_BAD_ARGS: ask-auto needs <name> <text> <output-file>"
+    require_arg "$text" "SPARCTL_ASK_AUTO_BAD_ARGS: ask-auto needs <name> <text> <output-file>"
+    require_arg "$out" "SPARCTL_ASK_AUTO_BAD_ARGS: ask-auto needs <name> <text> <output-file>"
+    if print_agent_run "$name" "$text" "$out"; then
+      lines="$(awk 'END { print NR }' "$out")"
+      bytes="$(wc -c < "$out" | tr -d '[:space:]')"
+      printf 'wrote print answer: %s (%s lines, %s bytes)\n' "$out" "$lines" "$bytes"
+      exit 0
+    fi
+    printf 'SPARCTL_ASK_AUTO_PRINT_FALLBACK: print provider failed; trying tmux backend for %s\n' "$name" >&2
+    if ! agent_running "$name"; then
+      agent_cmd="$(default_command_for_name "$name")"
+      agent_spawn "$name" "$agent_cmd"
+      sleep "$SPAR_AUTO_SETTLE_SECONDS"
+    fi
+    "$0" ask-delta "$name" "$text" "$out"
+    ;;
+
+  start)
+    # Start is intentionally persistent: no trap cleanup, so humans can attach and keep working.
+    replace=0
+    if [ "${1:-}" = "--replace" ]; then
+      replace=1
+      shift
+    fi
+    name="${1:-$DEFAULT_AGENT_NAME}"
+    if [ "$#" -gt 0 ]; then
+      shift
+    fi
+    if [ "${1:-}" = "--replace" ]; then
+      replace=1
+      shift
+    fi
+    if [ "$#" -gt 0 ]; then
+      agent_cmd="$*"
+    else
+      agent_cmd="$(default_command_for_name "$name")"
+    fi
+    SPAR_REPLACE_SESSION="$replace" agent_spawn "$name" "$agent_cmd"
+    sess="$(agent_session_name "$name")"
+    printf 'started %s -> tmux session %s\n' "$name" "$sess"
+    printf 'attach: tmux attach -t %s\n' "$sess"
+    ;;
+
+  send)
+    # Fire-and-return is useful when the user wants to watch the live TUI instead of blocking.
+    name="${1:-}"; text="${2:-}"
+    require_arg "$name" "SPARCTL_SEND_BAD_ARGS: send needs <name> and <text>"
+    require_arg "$text" "SPARCTL_SEND_BAD_ARGS: send needs <name> and <text>"
+    agent_send "$name" "$text"
+    ;;
+
+  ask)
+    # Ask gives scripts a best-effort cleaned answer; transcript/screen remain the source of truth
+    # for rich TUIs that draw status bars or rewrite older lines while responding.
+    name="${1:-}"; text="${2:-}"
+    require_arg "$name" "SPARCTL_ASK_BAD_ARGS: ask needs <name> and <text>"
+    require_arg "$text" "SPARCTL_ASK_BAD_ARGS: ask needs <name> and <text>"
+    base="$(agent_linecount "$name")"
+    agent_send "$name" "$text"
+    agent_wait_idle "$name"
+    agent_collect "$name" "$base" | strip_echo "$text"
+    ;;
+
+  ask-delta)
+    # Delta mode snapshots the transcript before sending, waits for idle, then removes the common
+    # prefix from the post-answer transcript. This handles TUI prompt lines that mutate in place
+    # instead of appending a clean new row.
+    name="${1:-}"; text="${2:-}"; out="${3:-}"
+    require_arg "$name" "SPARCTL_ASK_DELTA_BAD_ARGS: ask-delta needs <name> <text> <output-file>"
+    require_arg "$text" "SPARCTL_ASK_DELTA_BAD_ARGS: ask-delta needs <name> <text> <output-file>"
+    require_arg "$out" "SPARCTL_ASK_DELTA_BAD_ARGS: ask-delta needs <name> <text> <output-file>"
+    parent="$(dirname "$out")"
+    if [ ! -d "$parent" ]; then
+      echo "SPARCTL_ASK_DELTA_PARENT_MISSING: parent directory does not exist: $parent" >&2
+      exit 1
+    fi
+    before="$(mktemp "${TMPDIR:-/tmp}/sparctl-before.XXXXXX")"
+    after="$(mktemp "${TMPDIR:-/tmp}/sparctl-after.XXXXXX")"
+    cleanup_delta_files() { rm -f "$before" "$after"; }
+    trap cleanup_delta_files EXIT
+    agent_transcript "$name" > "$before"
+    agent_send "$name" "$text"
+    agent_wait_idle "$name"
+    agent_transcript "$name" > "$after"
+    awk '
+      NR == FNR { before[++before_count] = $0; next }
+      { after[++after_count] = $0 }
+      END {
+        first_delta = 1
+        while (first_delta <= before_count && first_delta <= after_count && before[first_delta] == after[first_delta]) {
+          first_delta++
+        }
+        for (line_number = first_delta; line_number <= after_count; line_number++) {
+          print after[line_number]
+        }
+      }
+    ' "$before" "$after" > "$out"
+    lines="$(awk 'END { print NR }' "$out")"
+    bytes="$(wc -c < "$out" | tr -d '[:space:]')"
+    printf 'wrote transcript delta: %s (%s lines, %s bytes)\n' "$out" "$lines" "$bytes"
+    ;;
+
+  ask-watch)
+    # Watch mode appends transcript changes while the agent is still drawing. It is noisier than
+    # ask-delta because TUIs mutate status lines, but it preserves progress during very long replies
+    # instead of depending only on the final retained scrollback window.
+    name="${1:-}"; text="${2:-}"; out="${3:-}"
+    require_arg "$name" "SPARCTL_ASK_WATCH_BAD_ARGS: ask-watch needs <name> <text> <output-file>"
+    require_arg "$text" "SPARCTL_ASK_WATCH_BAD_ARGS: ask-watch needs <name> <text> <output-file>"
+    require_arg "$out" "SPARCTL_ASK_WATCH_BAD_ARGS: ask-watch needs <name> <text> <output-file>"
+    parent="$(dirname "$out")"
+    if [ ! -d "$parent" ]; then
+      echo "SPARCTL_ASK_WATCH_PARENT_MISSING: parent directory does not exist: $parent" >&2
+      exit 1
+    fi
+    previous="$(mktemp "${TMPDIR:-/tmp}/sparctl-watch-prev.XXXXXX")"
+    current="$(mktemp "${TMPDIR:-/tmp}/sparctl-watch-cur.XXXXXX")"
+    chunk="$(mktemp "${TMPDIR:-/tmp}/sparctl-watch-chunk.XXXXXX")"
+    cleanup_watch_files() { rm -f "$previous" "$current" "$chunk"; }
+    trap cleanup_watch_files EXIT
+    agent_transcript "$name" > "$previous"
+    : > "$out"
+    agent_send "$name" "$text"
+    prev_hash=""
+    stable=0
+    polls=0
+    start=$SECONDS
+    while :; do
+      agent_transcript "$name" > "$current"
+      awk '
+        NR == FNR { previous[++previous_count] = $0; next }
+        { current[++current_count] = $0 }
+        END {
+          first_delta = 1
+          while (first_delta <= previous_count && first_delta <= current_count && previous[first_delta] == current[first_delta]) {
+            first_delta++
+          }
+          for (line_number = first_delta; line_number <= current_count; line_number++) {
+            print current[line_number]
+          }
+        }
+      ' "$previous" "$current" > "$chunk"
+      if [ -s "$chunk" ]; then
+        cat "$chunk" >> "$out"
+      fi
+      cp "$current" "$previous"
+      cur_hash="$(agent_snapshot "$name" | cksum)"
+      polls=$((polls + 1))
+      if [ "$cur_hash" = "$prev_hash" ]; then
+        stable=$((stable + 1))
+      else
+        stable=0
+      fi
+      prev_hash="$cur_hash"
+      if agent_idle_ready "$polls" "$stable"; then
+        break
+      fi
+      if [ $((SECONDS - start)) -ge "$WAIT_TIMEOUT" ]; then
+        echo "SPARCTL_ASK_WATCH_TIMEOUT: agent '$name' did not go idle within ${WAIT_TIMEOUT}s" >&2
+        exit 1
+      fi
+      sleep "$POLL_INTERVAL"
+    done
+    lines="$(awk 'END { print NR }' "$out")"
+    bytes="$(wc -c < "$out" | tr -d '[:space:]')"
+    printf 'wrote watched transcript: %s (%s lines, %s bytes)\n' "$out" "$lines" "$bytes"
+    ;;
+
+  ask-once)
+    # Some TUIs, notably Codex, accept an initial prompt argument but do not submit reliably when
+    # tmux injects text into an already-open composer. This one-shot mode starts a fresh session
+    # with the prompt shell-quoted as the last CLI argument, then captures the resulting transcript.
+    name="${1:-}"; agent_cmd="${2:-}"; text="${3:-}"; out="${4:-}"
+    require_arg "$name" "SPARCTL_ASK_ONCE_BAD_ARGS: ask-once needs <name> <agent command> <text> <output-file>"
+    require_arg "$agent_cmd" "SPARCTL_ASK_ONCE_BAD_ARGS: ask-once needs <name> <agent command> <text> <output-file>"
+    require_arg "$text" "SPARCTL_ASK_ONCE_BAD_ARGS: ask-once needs <name> <agent command> <text> <output-file>"
+    require_arg "$out" "SPARCTL_ASK_ONCE_BAD_ARGS: ask-once needs <name> <agent command> <text> <output-file>"
+    parent="$(dirname "$out")"
+    if [ ! -d "$parent" ]; then
+      echo "SPARCTL_ASK_ONCE_PARENT_MISSING: parent directory does not exist: $parent" >&2
+      exit 1
+    fi
+    SPAR_REPLACE_SESSION=1 agent_spawn "$name" "$agent_cmd $(shell_quote "$text")"
+    agent_wait_idle "$name"
+    agent_transcript "$name" > "$out"
+    lines="$(awk 'END { print NR }' "$out")"
+    bytes="$(wc -c < "$out" | tr -d '[:space:]')"
+    printf 'wrote one-shot transcript: %s (%s lines, %s bytes)\n' "$out" "$lines" "$bytes"
+    ;;
+
+  wait)
+    name="${1:-}"
+    require_arg "$name" "SPARCTL_WAIT_BAD_ARGS: wait needs <name>"
+    agent_wait_idle "$name"
+    ;;
+
+  screen)
+    name="${1:-}"
+    require_arg "$name" "SPARCTL_SCREEN_BAD_ARGS: screen needs <name>"
+    agent_snapshot "$name"
+    ;;
+
+  transcript)
+    # With a path, save to disk for paging/searching; without a path, print to stdout.
+    name="${1:-}"; out="${2:-}"
+    require_arg "$name" "SPARCTL_TRANSCRIPT_BAD_ARGS: transcript needs <name> [output-file]"
+    if [ -n "$out" ]; then
+      agent_save_transcript "$name" "$out"
+      printf 'wrote transcript: %s\n' "$out"
+    else
+      agent_transcript "$name"
+    fi
+    ;;
+
+  attach)
+    name="${1:-}"
+    require_arg "$name" "SPARCTL_ATTACH_BAD_ARGS: attach needs <name>"
+    exec tmux attach -t "$(agent_session_name "$name")"
+    ;;
+
+  sessions)
+    # Listing through tmux keeps this command truthful even if sessions were created elsewhere.
+    tmux list-sessions -F '#S' 2>/dev/null | grep -E "^${SPAR_SESSION_PREFIX}-" || true
+    ;;
+
+  stop)
+    name="${1:-}"
+    require_arg "$name" "SPARCTL_STOP_BAD_ARGS: stop needs <name>"
+    agent_kill "$name"
+    ;;
+
+  *)
+    echo "SPARCTL_UNKNOWN_COMMAND: unsupported command: $cmd" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
