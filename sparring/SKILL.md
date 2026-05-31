@@ -1,13 +1,13 @@
 ---
 name: sparring
-description: Use when the user says "sparring", "run sparring with Claude", "do sparring with Claude", "do sparring with GPT-5", "sparring with Codex", "sparring my plan with Claude", "discuss this approach with Codex", "get a second opinion through sparring", "give me the sparring transcript", "read the long sparring answer", or asks to leave a sparring session running. Runs a model-vs-model sparring flow through the bundled sparctl harness for planning, brainstorming, second opinions, code review, architecture critique, or normal dialogue; uses ask-session by default for fresh sessions, ask-resume only for explicit continuation of a known provider-native state, and tmux only when explicitly needed for live sessions.
+description: Use when the user says "sparring", "run sparring with Claude", "do sparring with Claude", "do sparring with GPT-5", "sparring with Codex", "sparring my plan with Claude", "discuss this approach with Codex", "get a second opinion through sparring", "give me the sparring transcript", "read the long sparring answer", or asks to leave a sparring session running. Runs a model-vs-model sparring flow through the bundled sparctl harness for planning, brainstorming, second opinions, code review, architecture critique, or normal dialogue; uses one ask-session command that creates or continues provider-native state, and uses tmux only when explicitly needed for live/fallback sessions.
 ---
 
 # Sparring
 
 Use this skill after it has been selected for a sparring request with another CLI agent. The skill turns that request into a concrete workflow through the bundled `sparring` harness.
 
-Production rule: for a fresh sparring session, use `ask-session` with a unique temporary session file. Use `ask-resume` only to continue a provider-native session whose state file was created and kept during the current sparring flow. Use tmux only when non-interactive CLI mode is unavailable or when the user explicitly wants a live attachable TUI session; do not use automatic fallback as the normal workflow.
+Production rule: use `ask-session` with a unique temporary state file. The same command creates the provider-native session on the first turn and resumes it on later turns. Use tmux only when non-interactive CLI mode is unavailable or when the user explicitly wants a live attachable TUI session; do not expose tmux as a second normal workflow.
 
 ## Scope
 
@@ -29,7 +29,7 @@ Resolve the harness path in this order:
 3. If you are developing the skill locally and `SPARRING_HOME` is explicitly set, it may override the bundled path for testing only.
 4. If no executable bundled `bin/sparctl` exists, report `SPARRING_HARNESS_MISSING` and include the skill directory you checked.
 
-Do not silently fall back to raw tmux when `sparctl` is missing; the harness contains the tested session, resume, and tmux behavior.
+Do not silently fall back to raw tmux when `sparctl` is missing; the harness contains the tested session and tmux behavior.
 
 ## Language Rule
 
@@ -79,16 +79,9 @@ Default command for a fresh sparring session:
 $SPARRING_HARNESS ask-session <name> /tmp/<name>-sparring.log "<prompt>" /tmp/<name>-turn.txt
 ```
 
-Explicit native continuation command, only when this sparring flow already created and intentionally kept the state file:
-
-```bash
-$SPARRING_HARNESS ask-resume <name> /tmp/<name>-native.log "<prompt>" /tmp/<name>-turn.txt
-```
-
 Command meanings:
 
-- `ask-session`: non-interactive CLI call with file-backed sparring history; use this as the default for fresh multi-turn debate.
-- `ask-resume`: non-interactive CLI call with provider-native resume (`claude --resume` / `codex exec resume`) plus a local audit file; use this only when intentionally continuing a known provider-native state file from the current sparring flow.
+- `ask-session`: non-interactive CLI call with provider-native session state (`claude --session-id` then `claude --resume`; `codex exec` then `codex exec resume`) plus a local audit file.
 
 Non-interactive providers receive prompts through stdin, not argv. This keeps long session prompts away from process listings and avoids shell argument-size limits. Empty successful provider answers are treated as errors by the harness.
 
@@ -98,14 +91,14 @@ Use this loop for planning, architecture discussion, brainstorming, second opini
 
 1. Resolve the opponent backend from the user's wording and available CLI tools. If the user names only a model family without a clear CLI backend, ask one short clarification instead of guessing.
 2. Build a prompt in the user's language asking for an independent response that follows the structured sparring protocol below. Tell the opponent to answer directly in the provider response, not by creating files, plans, notes, or other artifacts. Remind the opponent to counter the common model tendency to be agreeable: their role is to test the task critically, not to please the user or the main agent.
-3. Use `ask-session` by default for a fresh sparring request, with a unique temporary session file. Do not use `ask-resume` for a new sparring request or first turn: provider-native resume can continue stale CLI context if the state file already exists. Use `ask-resume` only when explicitly continuing a provider-native session state that this sparring flow created and intentionally kept.
+3. Use `ask-session` with a unique temporary state file. Reuse that same state file for follow-up turns in the same sparring flow. Do not reuse old state files for unrelated requests because provider-native session state can carry stale context.
 4. Read the output file and compare the opponent's answer with your own position: what you accept, what you reject, what remains disputed, and what new questions appeared.
 5. If required user data is missing, stop the sparring instead of debating on invented assumptions. Return to the user with a concise question list explaining what data is needed, why it matters, and which decisions are blocked.
 6. If important disputed points remain, send a focused follow-up turn. Name the exact disagreements and ask the opponent to defend strong arguments, revise weak ones, or propose a synthesis.
 7. Continue only while the next turn can improve the decision: unresolved high-impact disagreements, unchecked assumptions, outdated approach risks, important trade-offs, or shallow/over-agreeable answers.
 8. Stop when the key decisions are agreed, or when remaining disagreements are clearly documented as trade-offs that cannot be resolved without external/user data.
 9. Delete the temporary output file after reading it unless the user explicitly asks to keep artifacts.
-10. If continuing the debate, keep the same `ask-session` transcript file and send the next turn through it. Use an `ask-resume` state file only if this sparring flow already started in native-resume mode and the user intentionally wants that provider-native continuation.
+10. If continuing the debate, keep the same `ask-session` state file and send the next turn through it.
 11. If the sparring is finished, delete the state/session file too unless the user explicitly asks to keep it.
 12. Answer the user with a structured synthesis, not a raw transcript.
 
@@ -166,21 +159,9 @@ $SPARRING_HARNESS ask-session claude /tmp/claude-sparring.log "<prompt>" /tmp/cl
 $SPARRING_HARNESS ask-session codex /tmp/codex-sparring.log "<prompt>" /tmp/codex-turn.txt
 ```
 
-Explicit native continuation of a known Claude state file:
-
-```bash
-$SPARRING_HARNESS ask-resume claude /tmp/claude-native.log "<prompt>" /tmp/claude-turn.txt
-```
-
-Explicit native continuation of a known Codex state file:
-
-```bash
-$SPARRING_HARNESS ask-resume codex /tmp/codex-native.log "<prompt>" /tmp/codex-turn.txt
-```
-
 ## Tmux Live Mode
 
-Use tmux mode manually only when non-interactive CLI mode is unavailable, fails due limits/auth, or the user explicitly wants an attachable live session.
+Use tmux mode only when non-interactive CLI mode is unavailable, fails due limits/auth, or the user explicitly wants an attachable live session. Decide this operationally; do not present tmux as a separate standard mode unless it remains running for the user.
 
 ```bash
 $SPARRING_HARNESS start [--replace] <name> <agent-command>
@@ -207,7 +188,7 @@ For tmux mode, prefer `ask-watch` or `transcript` for very long answers because 
 
 ## Session Lifecycle
 
-If using non-interactive CLI mode, cleanup temporary output/session files after summarizing unless the user asks to keep them. This is mandatory for routine review/sparring: after reading `/tmp/<name>-turn.txt`, remove it; remove `/tmp/<name>-native.log` or `/tmp/<name>-sparring.log` when the dialogue will not continue.
+If using non-interactive CLI mode, cleanup temporary output/state files after summarizing unless the user asks to keep them. This is mandatory for routine review/sparring: after reading `/tmp/<name>-turn.txt`, remove it; remove `/tmp/<name>-sparring.log` when the dialogue will not continue.
 
 If the user asks for an ongoing tmux sparring session, leave it running and report the attach command.
 
@@ -226,6 +207,6 @@ Report briefly:
 - Include the understood task, high-level framing checks, disputed points, agreements, changed decisions, compared alternatives, remaining trade-offs, and next steps.
 - Use tables, short lists, and comparisons when they make the result easier to scan.
 - If missing user data stopped the sparring, return a question table with: question, why it is needed, and what decision it affects.
-- Mention which opponent backend and mode were used (`ask-session`, `ask-resume`, or tmux), but keep mechanics secondary to the decision.
+- Mention which opponent backend and mode were used (`ask-session` or tmux), but keep mechanics secondary to the decision.
 - Mention state/session file paths only if they remain useful for continued sparring.
 - Preserve the user's language in the final answer unless they explicitly ask otherwise.

@@ -34,17 +34,14 @@ if grep -R -q '/home/[^`[:space:]]*/projects/' "$SKILL_DIR/SKILL.md" "$ROOT/READ
   fail "documentation still points at an author's local checkout"
 fi
 
-# Fresh sparring must not default to provider-native resume because stale state can leak context.
-if grep -q 'Use `ask-resume` by default' "$SKILL_DIR/SKILL.md"; then
-  fail "SKILL.md still makes ask-resume the default for fresh sparring"
-fi
-grep -q 'Use `ask-session` by default for a fresh sparring request' "$SKILL_DIR/SKILL.md" \
-  || fail "SKILL.md does not define ask-session as the fresh multi-turn default"
-grep -q 'Do not use `ask-resume` for a new sparring request or first turn' "$SKILL_DIR/SKILL.md" \
-  || fail "SKILL.md does not warn against ask-resume on a first turn"
-if grep -q '`ask-print`' "$SKILL_DIR/SKILL.md"; then
-  fail "SKILL.md still recommends ask-print in the user-facing workflow"
-fi
+# Fresh sparring must use one provider-native ask-session command, not split modes.
+grep -q 'The same command creates the provider-native session on the first turn and resumes it on later turns' "$SKILL_DIR/SKILL.md" \
+  || fail "SKILL.md does not define ask-session as the single native-session workflow"
+for removed_mode in "ask-""resume" "ask-""auto" "ask-""print"; do
+  if grep -q "\`$removed_mode\`" "$SKILL_DIR/SKILL.md"; then
+    fail "SKILL.md still recommends removed mode: $removed_mode"
+  fi
+done
 
 # Opponent prompts must keep answers in the harness output, not in ad-hoc files the main agent
 # may forget to read before ending the sparring loop.

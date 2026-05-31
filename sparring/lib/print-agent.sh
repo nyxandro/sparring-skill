@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
-# print-agent.sh — primary non-interactive providers for sparring opponents.
+# print-agent.sh - non-interactive native-session providers for sparring opponents.
 #
-# Table of contents (key constructs):
+# Table of contents:
 #   Constants:
-#     SPAR_PRINT_TIMEOUT       hard cap for non-interactive provider calls
-#     SPAR_PRINT_CONTEXT_LINES retained session history lines sent on each turn
+#     SPAR_PRINT_TIMEOUT hard cap for non-interactive provider calls
 #   Functions:
-#     _print_report_provider_failure include provider stderr in harness failure diagnostics
-#     print_agent_run          run claude -p / codex exec and write the answer to a file
-#     print_agent_session_run  build a rolling-history prompt, run the provider, append transcript
-#     print_agent_resume_run   run provider-native resume while keeping a local audit transcript
+#     print_agent_session_run start or resume one provider-native session
 
 # --- Configuration constants --------------------------------------------------------
-SPAR_PRINT_TIMEOUT="${SPAR_PRINT_TIMEOUT:-500}"             # seconds per print/exec call
-SPAR_PRINT_CONTEXT_LINES="${SPAR_PRINT_CONTEXT_LINES:-400}" # bounded history for next prompt
+SPAR_PRINT_TIMEOUT="${SPAR_PRINT_TIMEOUT:-500}" # seconds per provider call
 
 # --- Internal helpers ---------------------------------------------------------------
 
-# Fail early when an output path has a typo; callers should create directories deliberately.
 _print_require_parent() {
   local path="$1" code="$2" parent
   parent="$(dirname "$path")"
@@ -27,7 +21,6 @@ _print_require_parent() {
   fi
 }
 
-# Create the temporary answer file next to the target so the final mv stays on one filesystem.
 _print_make_tmp_for_output() {
   local path="$1" parent base
   parent="$(dirname "$path")"
@@ -35,7 +28,6 @@ _print_make_tmp_for_output() {
   mktemp "$parent/.${base}.XXXXXX"
 }
 
-# A zero-byte successful answer is not useful sparring output, so treat it as provider failure.
 _print_commit_answer() {
   local tmp="$1" out="$2" provider="$3"
   if [ ! -s "$tmp" ]; then
@@ -46,7 +38,6 @@ _print_commit_answer() {
   mv "$tmp" "$out"
 }
 
-# Preserve provider stderr on failures; without it, transient CLI/auth/flag errors become opaque.
 _print_report_provider_failure() {
   local code="$1" detail="$2" status="$3" tmp="$4" err="$5"
   rm -f "$tmp"
@@ -64,7 +55,6 @@ _print_report_provider_failure() {
   return 1
 }
 
-# GNU timeout keeps wedged providers from blocking the harness forever.
 _print_require_timeout() {
   if ! command -v timeout >/dev/null 2>&1; then
     echo "SPAR_PRINT_TIMEOUT_COMMAND_MISSING: GNU timeout is required for print providers" >&2
@@ -72,7 +62,6 @@ _print_require_timeout() {
   fi
 }
 
-# Resolve a supported non-interactive provider in the caller's current PATH.
 _print_command_for_name() {
   local name="$1"
   case "$name" in
@@ -90,42 +79,37 @@ _print_command_for_name() {
   esac
 }
 
-# Linux exposes a kernel UUID source, avoiding an extra uuidgen dependency in the harness.
 _print_generate_uuid() {
   if [ -r /proc/sys/kernel/random/uuid ]; then
     tr -d '\n' < /proc/sys/kernel/random/uuid
     return 0
   fi
-  echo "SPAR_PRINT_UUID_SOURCE_MISSING: /proc/sys/kernel/random/uuid is required for Claude native resume" >&2
+  echo "SPAR_PRINT_UUID_SOURCE_MISSING: /proc/sys/kernel/random/uuid is required for Claude native sessions" >&2
   return 1
 }
 
-# Read a simple key=value field from the native resume audit file.
-_print_resume_state_value() {
+_print_state_value() {
   local state="$1" key="$2"
   [ -f "$state" ] || return 0
   awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$state"
 }
 
-# Native resume state is provider-specific; mixing providers would resume the wrong CLI session.
-_print_resume_validate_state() {
+_print_validate_state() {
   local name="$1" state="$2" stored_provider
-  stored_provider="$(_print_resume_state_value "$state" provider)"
+  stored_provider="$(_print_state_value "$state" provider)"
   if [ -n "$stored_provider" ] && [ "$stored_provider" != "$name" ]; then
-    echo "SPAR_PRINT_RESUME_PROVIDER_MISMATCH: state belongs to '$stored_provider', not '$name'" >&2
+    echo "SPAR_PRINT_SESSION_PROVIDER_MISMATCH: state belongs to '$stored_provider', not '$name'" >&2
     return 1
   fi
 }
 
-# Extract the first known Codex session identifier from JSONL emitted by `codex exec --json`.
 _print_extract_codex_session_id() {
   local events="$1"
   sed -nE 's/.*"(session_id|thread_id|conversation_id)"[[:space:]]*:[[:space:]]*"([^"]+)".*/\2/p' "$events" \
     | awk 'NF { print; exit }'
 }
 
-# Append/update local audit state after a successful provider-native turn.
-_print_append_resume_audit() {
+_print_append_session_audit() {
   local name="$1" state="$2" session_id="$3" prompt="$4" out="$5"
   if [ ! -f "$state" ]; then
     {
@@ -144,102 +128,25 @@ _print_append_resume_audit() {
 
 # --- Public API ---------------------------------------------------------------------
 
-# print_agent_run <name> <prompt> <output-file>
-# Prefer deterministic stdout-style providers over TUI scraping. The answer is written atomically
-# only after the provider exits successfully, so failed calls never leave misleading output behind.
-print_agent_run() {
-  local name="$1" prompt="$2" out="$3" exe tmp err status
-  if [ -z "$name" ] || [ -z "$prompt" ] || [ -z "$out" ]; then
-    echo "SPAR_PRINT_BAD_ARGS: print_agent_run needs <name> <prompt> <output-file>" >&2
-    return 1
-  fi
-  _print_require_parent "$out" "SPAR_PRINT_PARENT_MISSING" || return 1
-  _print_require_timeout || return 1
-  exe="$(_print_command_for_name "$name")" || return 1
-  tmp="$(_print_make_tmp_for_output "$out")"
-  err="$(_print_make_tmp_for_output "$out.stderr")"
-
-  # Providers are intentionally explicit and receive prompts through stdin to avoid ARG_MAX/ps leaks.
-  case "$name" in
-    claude)
-      if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" -p --permission-mode plan --output-format text > "$tmp" 2> "$err"; then
-        :
-      else
-        status=$?
-        _print_report_provider_failure "SPAR_PRINT_PROVIDER_FAILED" "claude -p for agent '$name'" "$status" "$tmp" "$err"
-        return 1
-      fi
-      ;;
-    codex)
-      if printf '%s' "$prompt" | timeout "$SPAR_PRINT_TIMEOUT" "$exe" --sandbox read-only -C "$PWD" \
-        exec --skip-git-repo-check --color never --output-last-message "$tmp" - >/dev/null 2> "$err"; then
-        :
-      else
-        status=$?
-        _print_report_provider_failure "SPAR_PRINT_PROVIDER_FAILED" "codex exec for agent '$name'" "$status" "$tmp" "$err"
-        return 1
-      fi
-      ;;
-  esac
-
-  rm -f "$err"
-  _print_commit_answer "$tmp" "$out" "$name"
-}
-
-# print_agent_session_run <name> <session-file> <prompt> <output-file>
-# Keep dialogue state in a simple append-only transcript and send a bounded rolling context to the
-# provider. This gives print/exec mode conversational continuity without relying on CLI internals.
+# print_agent_session_run <name> <state-file> <prompt> <output-file>
+# Start a provider-native session on first use and resume that exact session on later turns.
 print_agent_session_run() {
-  local name="$1" session="$2" prompt="$3" out="$4" built_prompt
-  if [ -z "$name" ] || [ -z "$session" ] || [ -z "$prompt" ] || [ -z "$out" ]; then
-    echo "SPAR_PRINT_SESSION_BAD_ARGS: print_agent_session_run needs <name> <session-file> <prompt> <output-file>" >&2
-    return 1
-  fi
-  _print_require_parent "$session" "SPAR_PRINT_SESSION_PARENT_MISSING" || return 1
-  _print_require_parent "$out" "SPAR_PRINT_SESSION_OUTPUT_PARENT_MISSING" || return 1
-
-  # Session mode only wraps structural context; the caller owns language-specific instructions.
-  built_prompt="$({
-    printf '<previous_sparring_turns>\n'
-    if [ -f "$session" ]; then
-      tail -n "$SPAR_PRINT_CONTEXT_LINES" "$session"
-    else
-      printf '(none)\n'
-    fi
-    printf '</previous_sparring_turns>\n\n'
-    printf '<current_request>\n%s\n</current_request>\n' "$prompt"
-  })"
-
-  print_agent_run "$name" "$built_prompt" "$out" || return 1
-  {
-    printf '\nUSER: %s\n' "$prompt"
-    printf 'ASSISTANT(%s):\n' "$name"
-    cat "$out"
-    printf '\n'
-  } >> "$session"
-}
-
-# print_agent_resume_run <name> <state-file> <prompt> <output-file>
-# Use the provider's own persisted conversation instead of replaying transcript text. The state file
-# stores only the provider session id plus an audit transcript for humans and future debugging.
-print_agent_resume_run() {
   local name="$1" state="$2" prompt="$3" out="$4" exe tmp err events session_id is_first_turn status
   if [ -z "$name" ] || [ -z "$state" ] || [ -z "$prompt" ] || [ -z "$out" ]; then
-    echo "SPAR_PRINT_RESUME_BAD_ARGS: print_agent_resume_run needs <name> <state-file> <prompt> <output-file>" >&2
+    echo "SPAR_PRINT_SESSION_BAD_ARGS: print_agent_session_run needs <name> <state-file> <prompt> <output-file>" >&2
     return 1
   fi
-  _print_require_parent "$state" "SPAR_PRINT_RESUME_STATE_PARENT_MISSING" || return 1
-  _print_require_parent "$out" "SPAR_PRINT_RESUME_OUTPUT_PARENT_MISSING" || return 1
+  _print_require_parent "$state" "SPAR_PRINT_SESSION_STATE_PARENT_MISSING" || return 1
+  _print_require_parent "$out" "SPAR_PRINT_SESSION_OUTPUT_PARENT_MISSING" || return 1
   _print_require_timeout || return 1
-  _print_resume_validate_state "$name" "$state" || return 1
+  _print_validate_state "$name" "$state" || return 1
   exe="$(_print_command_for_name "$name")" || return 1
   tmp="$(_print_make_tmp_for_output "$out")"
   err="$(_print_make_tmp_for_output "$out.stderr")"
   events="$(_print_make_tmp_for_output "$out.events")"
-  session_id="$(_print_resume_state_value "$state" session_id)"
+  session_id="$(_print_state_value "$state" session_id)"
   is_first_turn=0
 
-  # Claude can start with a caller-chosen UUID, so no JSON parsing is needed for the first turn.
   case "$name" in
     claude)
       if [ -z "$session_id" ]; then
@@ -253,7 +160,7 @@ print_agent_resume_run() {
         else
           status=$?
           rm -f "$events"
-          _print_report_provider_failure "SPAR_PRINT_RESUME_PROVIDER_FAILED" "claude first native turn for agent '$name'" "$status" "$tmp" "$err"
+          _print_report_provider_failure "SPAR_PRINT_SESSION_PROVIDER_FAILED" "claude first native turn for agent '$name'" "$status" "$tmp" "$err"
           return 1
         fi
       else
@@ -263,7 +170,7 @@ print_agent_resume_run() {
         else
           status=$?
           rm -f "$events"
-          _print_report_provider_failure "SPAR_PRINT_RESUME_PROVIDER_FAILED" "claude native resume for agent '$name'" "$status" "$tmp" "$err"
+          _print_report_provider_failure "SPAR_PRINT_SESSION_PROVIDER_FAILED" "claude native session continuation for agent '$name'" "$status" "$tmp" "$err"
           return 1
         fi
       fi
@@ -276,13 +183,13 @@ print_agent_resume_run() {
         else
           status=$?
           rm -f "$events"
-          _print_report_provider_failure "SPAR_PRINT_RESUME_PROVIDER_FAILED" "codex first native turn for agent '$name'" "$status" "$tmp" "$err"
+          _print_report_provider_failure "SPAR_PRINT_SESSION_PROVIDER_FAILED" "codex first native turn for agent '$name'" "$status" "$tmp" "$err"
           return 1
         fi
         session_id="$(_print_extract_codex_session_id "$events")"
         if [ -z "$session_id" ]; then
           rm -f "$tmp" "$err" "$events"
-          echo "SPAR_PRINT_RESUME_SESSION_ID_MISSING: codex --json did not emit a session/thread id" >&2
+          echo "SPAR_PRINT_SESSION_ID_MISSING: codex --json did not emit a session/thread id" >&2
           return 1
         fi
       else
@@ -292,7 +199,7 @@ print_agent_resume_run() {
         else
           status=$?
           rm -f "$events"
-          _print_report_provider_failure "SPAR_PRINT_RESUME_PROVIDER_FAILED" "codex native resume for agent '$name'" "$status" "$tmp" "$err"
+          _print_report_provider_failure "SPAR_PRINT_SESSION_PROVIDER_FAILED" "codex native session continuation for agent '$name'" "$status" "$tmp" "$err"
           return 1
         fi
       fi
@@ -301,6 +208,6 @@ print_agent_resume_run() {
 
   rm -f "$err"
   _print_commit_answer "$tmp" "$out" "$name" || { rm -f "$events"; return 1; }
-  _print_append_resume_audit "$name" "$state" "$session_id" "$prompt" "$out"
+  _print_append_session_audit "$name" "$state" "$session_id" "$prompt" "$out"
   rm -f "$events"
 }

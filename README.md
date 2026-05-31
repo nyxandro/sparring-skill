@@ -36,9 +36,8 @@ The production path is non-interactive CLI mode:
 
 - Claude is called through `claude -p`.
 - Codex is called through `codex exec`.
-- Multi-turn sparring keeps a small local session history and sends it as context on the next turn.
-- Native-resume sparring can instead continue the provider's own saved session with `claude --resume`
-  or `codex exec resume`, while keeping a local audit transcript.
+- Multi-turn sparring uses one `ask-session` command: it creates provider-native state on the
+  first turn and resumes that same provider session on follow-up turns.
 - Temporary output files are deleted after they are read unless you explicitly ask to keep them.
 
 There is also a tmux mode for live interactive agents. Use it only when non-interactive CLI mode is not
@@ -87,15 +86,11 @@ valid. Restart OpenCode or Claude Code after updating the skill.
 Most users do not need these directly; the skill calls them for you.
 
 ```bash
-# Sparring with local history.
+# Multi-turn sparring with provider-native state.
 sparring/bin/sparctl ask-session claude /tmp/sparring.log "First question" /tmp/turn-1.txt
 sparring/bin/sparctl ask-session claude /tmp/sparring.log "Follow-up" /tmp/turn-2.txt
-
-# Multi-turn sparring with provider-native resume.
-sparring/bin/sparctl ask-resume claude /tmp/claude-native.log "First question" /tmp/turn-1.txt
-sparring/bin/sparctl ask-resume claude /tmp/claude-native.log "Follow-up" /tmp/turn-2.txt
-sparring/bin/sparctl ask-resume codex /tmp/codex-native.log "First question" /tmp/codex-turn.txt
-sparring/bin/sparctl ask-resume codex /tmp/codex-native.log "Follow-up" /tmp/codex-turn.txt
+sparring/bin/sparctl ask-session codex /tmp/codex-sparring.log "First question" /tmp/codex-turn.txt
+sparring/bin/sparctl ask-session codex /tmp/codex-sparring.log "Follow-up" /tmp/codex-turn.txt
 
 # Live tmux session, only when you want to watch or when non-interactive CLI mode is unavailable.
 sparring/bin/sparctl start claude
@@ -114,7 +109,7 @@ bash test/run-all.sh
 ```text
 sparring/SKILL.md           skill instructions
 sparring/bin/sparctl        non-interactive CLI plus tmux controls
-sparring/lib/print-agent.sh claude -p / codex exec providers and session history
+sparring/lib/print-agent.sh claude -p / codex exec providers and native session state
 sparring/lib/tmux-agent.sh  live tmux fallback primitives
 dist/sparring.skill         downloadable self-contained skill archive
 test/                       smoke and regression tests
