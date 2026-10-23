@@ -2,9 +2,10 @@
 
 ![Sparring Skill](./sparring.png)
 
-[![Download Skill](https://img.shields.io/badge/Download-sparring.skill-blue?style=for-the-badge)](https://github.com/nyxandro/sparring-skill/raw/main/dist/sparring.skill)
+[![Download Sparring Skill](https://img.shields.io/badge/Download-sparring.skill-blue?style=for-the-badge)](https://github.com/nyxandro/sparring-skill/raw/main/dist/sparring.skill)
 
-Sparring Skill is for the moments when one model's answer is not enough.
+Sparring Skill is a model-vs-model sparring skill for Claude Code and OpenCode, for the moments
+when one model's answer is not enough.
 
 Ask your main agent to “do sparring with Claude” or “do sparring with Codex”, and it will ask the
 other CLI agent for an independent opinion, read the answer, and fold that second point of view
@@ -44,6 +45,17 @@ There is also a tmux mode for live interactive agents. Use it only when non-inte
 available or when you specifically want to watch the other agent in a terminal session.
 
 ## Install
+
+**Claude Code, as a plugin**, from [nyxandro/skills](https://github.com/nyxandro/skills), the
+catalog of my skills:
+
+```text
+/plugin install sparring --marketplace nyxandro/skills
+```
+
+Use one way or the other: with both, Claude Code loads the skill twice.
+
+**OpenCode, or Claude Code from the archive:**
 
 The committed `dist/sparring.skill` file is the downloadable skill archive. It contains the same
 self-contained skill folder as `sparring/`: `SKILL.md` plus the runtime harness under `bin/` and
