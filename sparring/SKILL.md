@@ -1,6 +1,8 @@
 ---
 name: sparring
 description: Use when the user says "sparring", "run sparring with Claude", "do sparring with Claude", "do sparring with GPT-5", "sparring with Codex", "sparring my plan with Claude", "discuss this approach with Codex", "get a second opinion through sparring", "give me the sparring transcript", "read the long sparring answer", or asks to leave a sparring session running. Runs a model-vs-model sparring flow through the bundled sparctl harness for planning, brainstorming, second opinions, code review, architecture critique, or normal dialogue; uses one ask-session command that creates or continues provider-native state, and uses tmux only when explicitly needed for live/fallback sessions.
+metadata:
+  version: "1.0.0"
 ---
 
 # Sparring

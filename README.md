@@ -1,137 +1,171 @@
-# Sparring Skill
+<div align="center">
 
-![Sparring Skill](./sparring.png)
+# Sparring
 
-[![Download Sparring Skill](https://img.shields.io/badge/Download-sparring.skill-blue?style=for-the-badge)](https://github.com/nyxandro/sparring-skill/raw/main/dist/sparring.skill)
+**A Claude Code skill that gets your AI agent a second opinion from another model and argues it out before answering you.**
 
-Sparring Skill is a model-vs-model sparring skill for Claude Code and OpenCode, for the moments
-when one model's answer is not enough.
+[![Release](https://img.shields.io/github/v/release/nyxandro/sparring-skill)](https://github.com/nyxandro/sparring-skill/releases)
+[![License](https://img.shields.io/github/license/nyxandro/sparring-skill)](LICENSE)
+[![Agent Skills](https://img.shields.io/badge/Agent%20Skills-SKILL.md-6f42c1)](https://agentskills.io/specification)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](#install)
 
-Ask your main agent to “do sparring with Claude” or “do sparring with Codex”, and it will ask the
-other CLI agent for an independent opinion, read the answer, and fold that second point of view
-back into the final response.
+**English** · [Русский](README.ru.md)
 
-Use it for:
+![Sparring](./sparring.png)
 
-- brainstorming an idea before implementing it;
-- getting a second opinion on architecture or a plan;
-- reviewing code or a risky change;
-- comparing alternatives;
-- stress-testing your own conclusion.
+</div>
 
-The normal workflow is intentionally simple:
+Sparring is a model-vs-model skill for Claude Code, Codex, OpenCode, Cursor and other agents that
+can run shell commands. Ask your agent to spar with Claude or Codex, and it sends the task to the
+other CLI agent, reads its independent answer, pushes back on the weak points over a few turns and
+brings you one synthesis instead of a raw transcript.
 
-```text
-Do sparring with Claude on this plan.
-Run a sparring review with Codex.
-Get a second opinion through sparring.
-Discuss this architecture with Claude.
-```
+## Why
 
-The skill handles the mechanics: chooses the right CLI command, writes temporary answer files,
-reads them back, cleans them up, and summarizes what changed after the sparring.
+A single model tends to agree with itself, and with you. It picks the first framing that looks
+reasonable and rarely questions it. A second model that is told to challenge the task finds a
+different set of holes. Sparring is useful when one answer isn't enough.
 
-## How It Works
-
-The production path is non-interactive CLI mode:
-
-- Claude is called through `claude -p`.
-- Codex is called through `codex exec`.
-- Multi-turn sparring uses one `ask-session` command: it creates provider-native state on the
-  first turn and resumes that same provider session on follow-up turns.
-- Temporary output files are deleted after they are read unless you explicitly ask to keep them.
-
-There is also a tmux mode for live interactive agents. Use it only when non-interactive CLI mode is not
-available or when you specifically want to watch the other agent in a terminal session.
+- Brainstorming an idea before you build it.
+- A second opinion on an architecture or a plan.
+- A review of code or a risky change.
+- Comparing alternatives.
+- Stress-testing your own conclusion.
 
 ## Install
 
-**Claude Code, as a plugin**, from [nyxandro/skills](https://github.com/nyxandro/skills), the
-catalog of my skills:
+| Agent | Command |
+|---|---|
+| Claude Code, as a plugin | `/plugin install sparring --marketplace nyxandro/skills` |
+| Claude Code, Codex, OpenCode, Cursor and others | `npx skills add nyxandro/sparring-skill` |
+| Any agent, by hand | Download the [latest `.skill` archive](https://github.com/nyxandro/sparring-skill/releases/latest/download/sparring.skill) and unpack it into the agent's skills folder |
 
-```text
-/plugin install sparring --marketplace nyxandro/skills
+Pick one. If you install it two ways, Claude Code loads the skill twice.
+
+<details>
+<summary>Requirements and more install options</summary>
+
+<br>
+
+- Linux with Bash 4 or newer and GNU `timeout`.
+- The opponent CLI installed and signed in, `claude` for Claude and `codex` for Codex.
+- `tmux`, only if you want a live session you can watch.
+- The one-line plugin install needs Claude Code 2.1.275 or later. On an older version, add the
+  catalog first with `/plugin marketplace add nyxandro/skills` and then run
+  `/plugin install sparring@nyxandro`.
+- With `npx skills`, add `-g` to install the skill for every project. To install a given version,
+  add its tag, as in `nyxandro/sparring-skill@v1.0.0`.
+- To install from the archive by hand, unzip it into the skills folder, for example
+  `unzip sparring.skill -d ~/.claude/skills` or `unzip sparring.skill -d ~/.config/opencode/skills`.
+  The archive already holds the `sparctl` harness, so nothing else needs to be checked out.
+
+</details>
+
+## Usage
+
+Ask in plain words. These requests all start the skill.
+
+- *Do sparring with Claude on this plan.*
+- *Run a sparring review of this change with Codex.*
+- *Get a second opinion through sparring on the database choice.*
+- *Discuss this architecture with Codex and tell me where you disagree.*
+
+The skill answers in the language you wrote in and asks the opponent to answer in it too.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Your task] --> B[Prompt for the opponent]
+    B --> C[Claude or Codex answers]
+    C --> D[Agent compares positions]
+    D -->|open disagreements| B
+    D -->|settled| E[One synthesis for you]
 ```
 
-Use one way or the other: with both, Claude Code loads the skill twice.
+1. The agent picks the opponent from your words and checks that its CLI is installed. If you name
+   only a model family, it asks which CLI should play it instead of guessing.
+2. It sends the task with a sparring protocol. The opponent restates the task, checks the framing
+   and whether the tools are current, lists the disputed points, and only then answers.
+3. The opponent is told to resist the usual habit of agreeing with the user or the other agent.
+4. The agent compares the answer with its own position. While a disagreement still matters, it
+   sends a focused follow-up in the same session.
+5. It stops when the key decisions are settled or the remaining disagreements are written down as
+   trade-offs, then deletes the temporary files.
 
-**OpenCode, or Claude Code from the archive:**
+Calls run in non-interactive mode, `claude -p` and `codex exec`, and resume the same provider
+session on every turn. A tmux mode exists for agents that only offer an interactive interface, or
+when you want to watch the other agent live.
 
-The committed `dist/sparring.skill` file is the downloadable skill archive. It contains the same
-self-contained skill folder as `sparring/`: `SKILL.md` plus the runtime harness under `bin/` and
-`lib/`; no external checkout or build step is required after download.
+## What you get back
 
-Install the current skill file into OpenCode:
+A synthesis, not a transcript. It opens with the recommendation, then covers the task as both
+sides understood it, the framing checks, what the models agreed on, what was disputed, which
+decisions changed, the alternatives compared, the trade-offs left open and the next steps. If the
+sparring stopped because data was missing, you get a short table of questions, why each one
+matters and which decision it blocks.
 
-```bash
-rm -rf ~/.config/opencode/skills/sparring
-unzip dist/sparring.skill -d ~/.config/opencode/skills
-```
+## Versions
 
-Install it into Claude Code:
+The current version sits in `metadata.version` of `sparring/SKILL.md`, so any installed copy tells
+you which one it is. Every version has a git tag and a
+[release](https://github.com/nyxandro/sparring-skill/releases) with its own archive.
+[CHANGELOG.md](CHANGELOG.md) lists what changed.
 
-```bash
-rm -rf ~/.claude/skills/sparring
-unzip dist/sparring.skill -d ~/.claude/skills
-```
+<details>
+<summary>Harness commands</summary>
 
-For local development, copying the `sparring/` folder directly into the skills directory is also
-valid. Restart OpenCode or Claude Code after updating the skill.
+<br>
 
-## Requirements
-
-- Linux with Bash 4+.
-- GNU `timeout` for non-interactive CLI mode.
-- `claude` and/or `codex` installed and authenticated.
-- `tmux` only for fallback/live mode.
-
-## Known Limits
-
-- Non-interactive CLI mode is the reliable production path; tmux mode is for interactive TUIs.
-- Tmux input is submitted as one line. Multi-line prompts are flattened before sending so they do
-  not become multiple accidental turns.
-- Tmux completion is detected by screen stability, not by a provider event. Very long pauses inside
-  a TUI response can still be ambiguous; use transcript export for long answers.
-
-## Developer Commands
-
-Most users do not need these directly; the skill calls them for you.
+Most people never run these, the skill does it for you.
 
 ```bash
-# Multi-turn sparring with provider-native state.
+# Multi-turn sparring with the provider's own session state.
 sparring/bin/sparctl ask-session claude /tmp/sparring.log "First question" /tmp/turn-1.txt
 sparring/bin/sparctl ask-session claude /tmp/sparring.log "Follow-up" /tmp/turn-2.txt
 sparring/bin/sparctl ask-session codex /tmp/codex-sparring.log "First question" /tmp/codex-turn.txt
-sparring/bin/sparctl ask-session codex /tmp/codex-sparring.log "Follow-up" /tmp/codex-turn.txt
 
-# Live tmux session, only when you want to watch or when non-interactive CLI mode is unavailable.
+# A live tmux session, only when you want to watch it.
 sparring/bin/sparctl start claude
 tmux attach -t spar-claude
 sparring/bin/sparctl stop claude
 ```
 
-Run the full regression suite:
+Run the test suite with `bash test/run-all.sh`.
 
-```bash
-bash test/run-all.sh
-```
+</details>
 
-## Project Layout
+<details>
+<summary>Known limits</summary>
+
+<br>
+
+- Non-interactive mode is the reliable path. Tmux mode is there for interactive interfaces only.
+- In tmux mode a prompt is sent as one line, so multi-line prompts are flattened first.
+- Tmux mode decides an answer is complete when the screen stops changing. A very long pause inside
+  an answer can confuse it, so use the transcript export for long answers.
+
+</details>
+
+<details>
+<summary>Repository layout</summary>
+
+<br>
 
 ```text
-sparring/SKILL.md           skill instructions
-sparring/bin/sparctl        non-interactive CLI plus tmux controls
-sparring/lib/print-agent.sh claude -p / codex exec providers and native session state
-sparring/lib/tmux-agent.sh  live tmux fallback primitives
-dist/sparring.skill         downloadable self-contained skill archive
+sparring/                   the skill
+  SKILL.md                  instructions for the agent
+  bin/sparctl               the non-interactive CLI and tmux controls
+  lib/print-agent.sh        claude -p and codex exec providers with session state
+  lib/tmux-agent.sh         the live tmux fallback
+dist/sparring.skill         the skill folder as a downloadable archive
 test/                       smoke and regression tests
+CHANGELOG.md                what changed in each version
+README.md, README.ru.md     this page in English and in Russian
 ```
 
-## Notes
-
-Non-interactive CLI mode is preferred because it captures clean stdout and avoids terminal scraping.
-Tmux mode is kept for agents that only expose an interactive TUI, but it is inherently more heuristic.
+</details>
 
 ## License
 
-MIT
+[MIT](LICENSE)
